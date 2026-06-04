@@ -1,0 +1,16 @@
+/* style.css */
+body {
+  background-color: #020418; /* Deep, moody blue */
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  overflow: hidden; /* Prevents scrollbars */
+}
+
+.letter-mount {
+  width: 1920px;
+  height: 1080px;
+  /* The canvas will automatically fill this space */
+}

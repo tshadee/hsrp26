@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>test</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <!-- ── Page ──────────────────────────────────────────────────────────────── -->
+  <main class="page">
+
+    <header class="site-header">
+      <div id="letter-mount" class="letter-mount" aria-label="Letter display"></div>
+    </header>
+
+  </main>
+
+  <!-- ──  engine  ────────────────────────────────────────── -->
+  <script type="module">
+    import { SpritePool, LetterParent, WordParent } from './engine.js';
+
+    const mount = document.getElementById('letter-mount');
+    const mainPool = new SpritePool(mount, { maxSprites: 5000, spriteSize: 3 });
+
+    const mainTextController = new WordParent('Hello World', './shapes/letters/', 14);
+
+    mainPool.mutateTo(mainTextController);
+
+    setTimeout(() => {
+      mainPool.mutateTo(mainTextController.morphTo('New. Text?'));
+    }, 5000);
+
+    setTimeout(() => {
+      mainPool.moveTo(500, 500);
+    }, 10000);
+
+  </script>
+
+</body>
+</html>
