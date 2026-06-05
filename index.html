@@ -20,28 +20,30 @@
 
   <!-- ──  engine  ────────────────────────────────────────── -->
   <script type="module">
-    import { SpritePool, LetterParent, SpriteWrite } from './engine.js';
+    import { SpritePool, SpriteWrite } from './engine.js';
 
     const mount = document.getElementById('letter-mount');
     const mainPool = new SpritePool(mount, { maxSprites: 5000, spriteSize: 2 });
+    const textController = new SpriteWrite("Hello World!", './shapes/letters/', 14).attach(mainPool);
 
-    const mainTextController = new SpriteWrite('the quick brown fox jumps\nover the lazy dog', './shapes/letters/', 14);
-
-    mainPool.mutateTo(mainTextController);
-
-    setTimeout(() => {
-      mainPool.mutateTo(mainTextController.morphTo('THE QUICK BROWN FOX JUMPS\nOVER THE LAZY DOG'));
-    }, 3000);
+    await mainPool.mutateTo(textController);
 
     setTimeout(() => {
-      mainPool.mutateTo(mainTextController.morphTo('0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`'));
-    }, 6000);
+      textController.morphTo('THE QUICK BROWN FOX JUMPS\nOVER THE LAZY DOG');
+    }, 5000);
 
     setTimeout(() => {
-      mainTextController.setFontSize(10);
-      mainPool.mutateTo(mainTextController.morphTo('hsrp.cc'));
-      mainPool.moveTo(1920/2,50);
-    }, 9000);
+      textController.morphTo('0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`');
+    }, 8000);
+
+    setTimeout(() => {
+      //mainTextController.setFontSize(10);
+      textController.morphTo('hsrp.cc');
+    }, 11000);
+
+    setTimeout(() => {
+      mainPool.moveTo(150,50);
+    }, 14000);
 
 
 

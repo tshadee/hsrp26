@@ -1,6 +1,9 @@
 const DEFAULT_SIZE = 4;
 const MAX_SPRITES = 10000;
 
+const DEFAULT_SPRITE_SPEED = 0.01;  //these need to be framerate independent
+const DEFAULT_SPRITE_SPEED_VARIANCE = 0.01;
+
 function shuffleArray(array) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -9,18 +12,22 @@ function shuffleArray(array) {
   return array;
 }
 
+const monitorFPS = 60; // Default fallback value
+
 class SpriteChild {
   constructor() {
     this.curr = { x: 0, y: 0, a: 0 };
     this.start = { x: 0, y: 0, a: 0 }; // Track origin for Bezier path
     this.target = { x: 0, y: 0, a: 0 };
+    this.curlDirection = Math.random()*2 - 1;
+    this.curlClockwise = Math.random()*2 - 1;
     
     this.isDying = false;
-    this.drag = 0.2 + Math.random() * 1.1; 
+    this.drag = 0.2 + Math.random() * 1.5; 
     
     // Time-based variables for Bezier interpolation
     this.progress = 1; // 0 to 1
-    this.speed = 0.01 + Math.random() * 0.01; // Individual speed
+    this.speed = DEFAULT_SPRITE_SPEED*(60/monitorFPS) + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE*(60/monitorFPS); // Individual speed
   }
 
   set(state) {
@@ -31,17 +38,31 @@ class SpriteChild {
 
     if (state.x !== undefined) this.target.x = state.x;
     if (state.y !== undefined) this.target.y = state.y;
-    if (state.a !== undefined) this.target.a = state.a;
+    if (state.a !== undefined) this.target.a = state.a; 
 
     // Reset progress and randomize speed slightly to break up rigid formations
     this.progress = 0; 
-    this.speed = 0.01 + Math.random() * 0.01;
+    this.speed = DEFAULT_SPRITE_SPEED*(60/monitorFPS) + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE*(60/monitorFPS);
+
+    
   }
 
   update() {
     if (this.isDying) {
-      this.curr.y += 2 * this.drag; 
-      this.curr.a += (0 - this.curr.a) * 0.1;
+      const oldX = this.curr.x;
+      const oldY = this.curr.y;
+      this.curr.x += 0.01;
+      this.curr.y += 0.01;
+      this.curr.a += (0 - this.curr.a) * 0.01;
+      
+      const globalDx = this.curr.x - oldX;
+      const globalDy = this.curr.y - oldY;
+      const swerveStrength = this.curlDirection * 15.45 * this.drag; 
+      const curlX = -this.curlClockwise * globalDy * swerveStrength;
+      const curlY = this.curlClockwise * globalDx * swerveStrength;
+
+      this.curr.x += curlX;
+      this.curr.y += curlY;
       return;
     }
 
@@ -70,7 +91,7 @@ class SpriteChild {
       const turbulenceForce = Math.sin(t * Math.PI); 
       
       // Create a perpendicular swerve relative to their travel vector
-      const swerveStrength = 0.025 * turbulenceForce * this.drag; 
+      const swerveStrength = this.curlDirection * 0.05 * turbulenceForce * this.drag; 
       const curlX = -globalDy * swerveStrength;
       const curlY = globalDx * swerveStrength;
 
@@ -148,8 +169,8 @@ export class SpritePool {
    * This triggers the 'schooling fish' Bezier path for all active sprites.
    */
   moveTo(newX, newY) {
-    const dx = newX - this.layoutCenterX;
-    const dy = newY - this.layoutCenterY;
+    const dx = (newX - this.layoutCenterX)*(Math.random()*0.35+0.2);
+    const dy = (newY - this.layoutCenterY)*(Math.random()*0.35+0.2);
 
     for (let i = 0; i < this.maxSprites; i++) {
       const sprite = this.sprites[i];
@@ -186,10 +207,10 @@ export class SpritePool {
         const pt = newLayout[i];
 
         if (sprite.target.a === 0) {
-          sprite.curr.x = this.layoutCenterX + (Math.random() * 30 - 15);
-          sprite.curr.y = this.layoutCenterY + (Math.random() * 30 - 15);
+          sprite.curr.x = this.layoutCenterX + (Math.random() * 17 - 15);
+          sprite.curr.y = this.layoutCenterY + (Math.random() * 17 - 15);
           sprite.curr.a = 0;
-          sprite.drag = 0.2 + Math.random() * 1.1;
+          sprite.drag = 0.2 + Math.random() * 1.5;
         }
 
         sprite.isDying = false;
@@ -198,7 +219,7 @@ export class SpritePool {
       } else {
         if (sprite.target.a > 0) {
           sprite.isDying = true;
-          sprite.drag = 0.2 + Math.random() * 1.1;
+          sprite.drag = 0.2 + Math.random() * 1.5;
           sprite.set({ a: 0 }); 
         }
       }
@@ -236,7 +257,25 @@ export class SpritePool {
 
 // ─── Layout Controllers ──────────────────────────────────────
 
-// ─── Layout Controllers ──────────────────────────────────────
+export class LayoutController {
+  constructor() {
+    this.pool = null; // The renderer this controller is currently driving
+  }
+
+  // Binds the controller to a specific pool
+  attach(pool) {
+    this.pool = pool;
+    return this; // Enable chaining
+  }
+
+  // To be overridden by child classes
+  async getLayout(canvasWidth, canvasHeight, spriteSize) {
+    console.warn("getLayout must be implemented by the subclass");
+    return [];
+  }
+}
+
+
 
 export class LetterParent {
   constructor(letterFilename, shapesBase = './shapes/letters/') {
@@ -258,16 +297,15 @@ export class LetterParent {
   }
 }
 
-export class SpriteWrite {
+export class SpriteWrite extends LayoutController {
   constructor(text, shapesBase = './shapes/letters/', fontSize = 16, densityFactor = 0.4, justify = 'center') {
+    super(); // Initialize the LayoutController base
     this.text = text; 
     this.shapesBase = shapesBase;
     this.fontSize = fontSize; 
     this.densityFactor = densityFactor;
-    this.justify = justify; // 'left', 'center', or 'right'
+    this.justify = justify;
     this.pixelMultiplier = 4; 
-    
-    // Spacing offsets in pixel space
     this.hs = -15; 
     this.vs = 0; 
   }
@@ -292,9 +330,18 @@ export class SpriteWrite {
     return this;
   }
 
-  // Chaining method to update the text without creating a new instance
-  morphTo(newText) {
+  async morphTo(newText) {
     this.text = newText; 
+    
+    // If this controller is actively attached to a pool, trigger the animation
+    if (this.pool) {
+      // Under the hood, it still uses the pool's coordinate mapper, 
+      // but your front-end syntax remains incredibly clean.
+      await this.pool.mutateTo(this); 
+    } else {
+      console.warn("SpriteWrite morphed, but it isn't attached to a SpritePool.");
+    }
+    
     return this; 
   }
 
