@@ -1,7 +1,7 @@
 const DEFAULT_SIZE = 4;
 const MAX_SPRITES = 10000;
 
-const DEFAULT_SPRITE_SPEED = 0.01;  //these need to be framerate independent
+const DEFAULT_SPRITE_SPEED = 0.02;  //these need to be framerate independent
 const DEFAULT_SPRITE_SPEED_VARIANCE = 0.01;
 
 function shuffleArray(array) {
@@ -23,7 +23,7 @@ class SpriteChild {
     this.curlClockwise = Math.random()*2 - 1;
     
     this.isDying = false;
-    this.drag = 0.2 + Math.random() * 1.5; 
+    this.drag = 0.2 + Math.random() * 1.1; 
     
     this.progress = 1; 
     this.speed = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE; 
@@ -58,7 +58,7 @@ class SpriteChild {
       
       const globalDx = this.curr.x - oldX;
       const globalDy = this.curr.y - oldY;
-      const swerveStrength = this.curlDirection * 15.45 * this.drag; 
+      const swerveStrength = this.curlDirection * 0.45 * this.drag; 
       const curlX = -this.curlClockwise * globalDy * swerveStrength;
       const curlY = this.curlClockwise * globalDx * swerveStrength;
 
@@ -94,13 +94,13 @@ class SpriteChild {
       this.curr.y = baseY + curlY;
     }
 
-    // Convert pixel speed back to a per-frame equivalent so kinetic alpha feels the same
+    //for velocity based alpha OTF adjustments
     const vx = (this.curr.x - oldX) / timeScale;
     const vy = (this.curr.y - oldY) / timeScale;
     const speed = Math.hypot(vx, vy);
     const dist = Math.hypot(this.target.x - this.curr.x, this.target.y - this.curr.y);
 
-    const kineticAlpha = 0.1 + (speed / 10) * 1.8;
+    const kineticAlpha = 0.2 + (speed / 10) * 1.8;
     const clampedKineticAlpha = Math.max(0.1, Math.min(1.5, kineticAlpha));
 
     let deadzoneMix = 0;
@@ -112,13 +112,12 @@ class SpriteChild {
 
     const desiredAlpha = (1 - deadzoneMix) * clampedKineticAlpha + deadzoneMix * this.target.a;
     
-    // Frame-independent exponential ease for kinetic alpha
     const alphaEase = 1 - Math.pow(1 - 0.2, timeScale);
     this.curr.a += (desiredAlpha - this.curr.a) * alphaEase;
   }
 }
 
-// ─── The Global Slurry Pool ──────────────────────────────────────────────────
+// Global Sprite Pool
 
 export class SpritePool {
   constructor(mountEl, options = {}) {
@@ -141,8 +140,11 @@ export class SpritePool {
       this.sprites.push(new SpriteChild()); 
     }
 
-    // Initialize timestamp tracking
+    // FPS independence requires deltaT
     this.lastTime = performance.now();
+
+    //to track mid-mutation calls and abandon old if new is present
+    this.mutateId = 0;
 
     this._renderLoop = this._renderLoop.bind(this);
     requestAnimationFrame(this._renderLoop);
@@ -161,10 +163,8 @@ export class SpritePool {
     }
   }
 
-  /**
-   * Shifts the entire formation to a new absolute coordinate on the canvas.
-   * This triggers the 'schooling fish' Bezier path for all active sprites.
-   */
+
+   //Shifts the entire formation to a new absolute coordinate on the canvas. Bezier movement
   moveTo(newX, newY) {
     const dx = (newX - this.layoutCenterX)*(Math.random()*0.35+0.2);
     const dy = (newY - this.layoutCenterY)*(Math.random()*0.35+0.2);
@@ -186,7 +186,28 @@ export class SpritePool {
   }
 
   async mutateTo(layoutController) {
+    
+    //Mutation race condition guard. This is to prevent multiple calls to mutateTo from crashing the web
+    this.mutateId++;
+    const currentMutateId = this.mutateId;
+
+    for (let i = 0; i < this.maxSprites; i++) {
+      const sprite = this.sprites[i];
+      // If a sprite was left out in the cold by an aborted transition, 
+      // safely sync its target to its current visual state.
+      if (sprite.isDying && sprite.curr.a < 0.01) {
+        sprite.target.a = 0;
+      }
+      // Force reset threshold so they don't unexpectedly shed mid-flight
+      sprite.shedThreshold = 2; 
+    }
+
     const newLayout = await layoutController.getLayout(this.width, this.height, this.spriteSize);
+    
+    if (currentMutateId !== this.mutateId) {
+      return; 
+    }
+    //after this is normal mutation
     
     const offsetX = this.layoutCenterX - (this.width / 2);
     const offsetY = this.layoutCenterY - (this.height / 2);
@@ -364,9 +385,9 @@ export class SpriteWrite extends LayoutController {
     this.fontSize = fontSize; 
     this.densityFactor = densityFactor;
     this.justify = justify;
-    this.pixelMultiplier = 4; 
-    this.hs = -15; 
-    this.vs = 0; 
+    this.pixelMultiplier = 3.5; 
+    this.hs = -20; 
+    this.vs = -5; 
   }
 
   setFontSize(size) {
@@ -389,13 +410,15 @@ export class SpriteWrite extends LayoutController {
     return this;
   }
 
-  async morphTo(newText) {
+  async morphTo(newText, forceFlicker = false) {
+    // Guard against redundant morphs to stop the uncontrolled scrambling
+    if (this.text === newText && !forceFlicker) {
+      return this; 
+    }
+
     this.text = newText; 
     
-    // If this controller is actively attached to a pool, trigger the animation
     if (this.pool) {
-      // Under the hood, it still uses the pool's coordinate mapper, 
-      // but your front-end syntax remains incredibly clean.
       await this.pool.mutateTo(this); 
     } else {
       console.warn("SpriteWrite morphed, but it isn't attached to a SpritePool.");
@@ -404,7 +427,7 @@ export class SpriteWrite extends LayoutController {
     return this; 
   }
 
-  // Maps illegal/difficult characters to safe JSON filenames
+
   _sanitizeChar(char) {
     const specialCharOutputs = {
         '?': 'question',

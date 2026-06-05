@@ -23,36 +23,40 @@
     import { SpritePool, SpriteWrite } from './engine.js';
 
     const mount = document.getElementById('letter-mount');
-    const mainPool = new SpritePool(mount, { maxSprites: 5000, spriteSize: 2 });
+    const mainPool = new SpritePool(mount, { maxSprites: 2000, spriteSize: 2 });
     const textController = new SpriteWrite("Hello World!", './shapes/letters/NVMono/', 14).attach(mainPool);
 
     await mainPool.mutateTo(textController);
 
-    setTimeout(() => {
-      textController.morphTo('hsrp26');
-    }, 3000);
+    function cycleText() {
+        const texts = [
+          'hsrp26',
+          'hsrp26.cc',
+          '0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`',
+          'the quick brown fox\njumps over the lazy dog',
+          'THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG',
+          'This is a test website\nnot much to see yet',
+          'There are some test strings cycling through',
+          'Feel free to watch them morph',
+          'A',
+          'B',
+          'C',
+          'D',
+          '10:00',
+          '11:11',
+          '12:34',
+          '07:31'
+        ];
+  
+        let index = 0;
+  
+        setInterval(() => {
+          textController.morphTo(texts[index]);
+          index = (++index) % texts.length;
+        }, 3000);
+    }
 
-    setTimeout(() => {
-      textController.morphTo('hsrp26.cc');
-    }, 6000);
-
-    setTimeout(() => {
-      //mainTextController.setFontSize(10);
-      textController.morphTo('hsrp26.ccc');
-    }, 9000);
-
-    setTimeout(() => {
-      textController.morphTo('0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`');
-    }, 12000);
-
-    setTimeout(() => {
-      textController.morphTo('the quick brown fox\njumps over the lazy dog');
-    }, 15000);
-
-    setTimeout(() => {
-      textController.morphTo('THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG');
-    }, 18000);
-
+    cycleText();
 
 
   </script>
