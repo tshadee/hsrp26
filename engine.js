@@ -236,9 +236,11 @@ export class SpritePool {
 
 // ─── Layout Controllers ──────────────────────────────────────
 
+// ─── Layout Controllers ──────────────────────────────────────
+
 export class LetterParent {
   constructor(letterFilename, shapesBase = './shapes/letters/') {
-    // The filename is now pre-sanitized by WordParent
+    // The filename is now pre-sanitized by SpriteWrite
     this.letterFilename = letterFilename; 
     this.shapesBase = shapesBase;
   }
@@ -256,13 +258,18 @@ export class LetterParent {
   }
 }
 
-export class WordParent {
-  constructor(word, shapesBase = './shapes/letters/', fontSize = 16, densityFactor = 0.4) {
-    this.word = word; // Removed .toLowerCase() constraint
+export class SpriteWrite {
+  constructor(text, shapesBase = './shapes/letters/', fontSize = 16, densityFactor = 0.4, justify = 'center') {
+    this.text = text; 
     this.shapesBase = shapesBase;
     this.fontSize = fontSize; 
     this.densityFactor = densityFactor;
+    this.justify = justify; // 'left', 'center', or 'right'
     this.pixelMultiplier = 4; 
+    
+    // Spacing offsets in pixel space
+    this.hs = -15; 
+    this.vs = 0; 
   }
 
   setFontSize(size) {
@@ -270,9 +277,24 @@ export class WordParent {
     return this; 
   }
 
+  setFontHS(spacing) {
+    this.hs = spacing;
+    return this;
+  }
+
+  setFontVS(spacing) {
+    this.vs = spacing;
+    return this;
+  }
+
+  setJustify(justification) {
+    this.justify = justification;
+    return this;
+  }
+
   // Chaining method to update the text without creating a new instance
-  morphTo(newWord) {
-    this.word = newWord; // Removed .toLowerCase() constraint
+  morphTo(newText) {
+    this.text = newText; 
     return this; 
   }
 
@@ -293,7 +315,6 @@ export class WordParent {
         '(': 'left_paren',
         ')': 'right_paren',
         ' ': 'space',
-        '\n': 'enter',
         ',': 'comma', 
         "'": 'apostrophe', 
         '"': 'quotation',
@@ -313,64 +334,90 @@ export class WordParent {
         '`': 'backtick'
     };
 
-    // 1. Check for special characters
-    if (specialCharOutputs[char]) {
-      return specialCharOutputs[char];
-    }
-    
-    // 2. Check for Uppercase Letters A-Z
-    if (/[A-Z]/.test(char)) {
-      return `${char}_upper`;
-    }
-    
-    // 3. Check for Lowercase Letters a-z
-    if (/[a-z]/.test(char)) {
-      return `${char}_lower`;
-    }
+    if (specialCharOutputs[char]) return specialCharOutputs[char];
+    if (/[A-Z]/.test(char)) return `${char}_upper`;
+    if (/[a-z]/.test(char)) return `${char}_lower`;
 
-    // 4. Fallback (Numbers 0-9)
+    // Fallback (Numbers 0-9)
     return char;
   }
 
   async getLayout(canvasWidth, canvasHeight, spriteSize) {
     const finalLayout = [];
-    const letters = this.word.split('');
-    const len = letters.length;
+    
+    // Split the input into an array of lines based on the newline character
+    const lines = this.text.split('\n');
     
     const letterScale = this.fontSize * this.pixelMultiplier;
     const letterArea = letterScale * letterScale;
     const spriteArea = spriteSize * spriteSize;
     const targetSpriteCount = Math.floor((letterArea / spriteArea) * this.densityFactor);
 
-    const totalWidth = len * letterScale;
-    const startX = (canvasWidth / 2) - (totalWidth / 2);
-    const startY = (canvasHeight / 2) - (letterScale / 2);
+    // 1. Pre-calculate line dimensions to support block justification
+    const lineGeometries = lines.map(line => {
+      // Line width = (Number of chars * Scale) + (Number of spaces between chars * hs)
+      const width = line.length > 0 
+        ? (line.length * letterScale) + ((line.length - 1) * this.hs) 
+        : 0;
+      return { text: line, width: width };
+    });
 
-    for (let i = 0; i < len; i++) {
-      const char = letters[i];
+    // Find the widest line to act as the bounding box for left/right justification
+    const maxLineWidth = Math.max(...lineGeometries.map(lg => lg.width));
+    
+    // Total block height = (Number of lines * Scale) + (Number of spaces between lines * vs)
+    const totalHeight = (lines.length * letterScale) + ((lines.length - 1) * this.vs);
 
-      // 1. Handle Spaces: Skip fetching, but the 'i' index still creates the physical gap
-      if (char === ' ') continue;
+    // Center the entire text block vertically in the canvas
+    let currentY = (canvasHeight / 2) - (totalHeight / 2);
 
-      // 2. Handle Special Characters
-      const safeFilename = this._sanitizeChar(char);
-
-      const letterBlueprint = new LetterParent(safeFilename, this.shapesBase);
-      let spriteData = await letterBlueprint.getLayout();
-
-      if (spriteData.length > targetSpriteCount) {
-        shuffleArray(spriteData); 
-        spriteData = spriteData.slice(0, targetSpriteCount);
+    // 2. Build the layout line by line
+    for (const lineGeo of lineGeometries) {
+      let currentX = 0;
+      
+      // Determine the starting X coordinate based on justification
+      if (this.justify === 'left') {
+        currentX = (canvasWidth / 2) - (maxLineWidth / 2);
+      } else if (this.justify === 'right') {
+        currentX = (canvasWidth / 2) + (maxLineWidth / 2) - lineGeo.width;
+      } else { 
+        // 'center' (default)
+        currentX = (canvasWidth / 2) - (lineGeo.width / 2);
       }
 
-      for (const pt of spriteData) {
-        finalLayout.push({
-          x: startX + (pt.x * letterScale) + (i * letterScale),
-          y: startY + (pt.y * letterScale),
-          a: pt.a
-        });
+      // 3. Process each character in the current line
+      for (let i = 0; i < lineGeo.text.length; i++) {
+        const char = lineGeo.text[i];
+
+        if (char !== ' ') {
+          const safeFilename = this._sanitizeChar(char);
+          const letterBlueprint = new LetterParent(safeFilename, this.shapesBase);
+          let spriteData = await letterBlueprint.getLayout();
+
+          if (spriteData.length > targetSpriteCount) {
+            // Shuffle array is assumed to be available globally from your engine.js
+            shuffleArray(spriteData); 
+            spriteData = spriteData.slice(0, targetSpriteCount);
+          }
+
+          // Map normalized JSON coordinates to global canvas coordinates
+          for (const pt of spriteData) {
+            finalLayout.push({
+              x: currentX + (pt.x * letterScale),
+              y: currentY + (pt.y * letterScale),
+              a: pt.a
+            });
+          }
+        }
+        
+        // Advance the X cursor for the next character (plus horizontal spacing)
+        currentX += letterScale + this.hs;
       }
+      
+      // Advance the Y cursor for the next line (plus vertical spacing)
+      currentY += letterScale + this.vs;
     }
+    
     return finalLayout;
   }
 }

@@ -20,39 +20,29 @@
 
   <!-- ──  engine  ────────────────────────────────────────── -->
   <script type="module">
-    import { SpritePool, LetterParent, WordParent } from './engine.js';
+    import { SpritePool, LetterParent, SpriteWrite } from './engine.js';
 
     const mount = document.getElementById('letter-mount');
     const mainPool = new SpritePool(mount, { maxSprites: 5000, spriteSize: 2 });
 
-    const mainTextController = new WordParent('the quick brown fox jumps', './shapes/letters/', 14);
+    const mainTextController = new SpriteWrite('the quick brown fox jumps\nover the lazy dog', './shapes/letters/', 14);
 
     mainPool.mutateTo(mainTextController);
 
     setTimeout(() => {
-      mainPool.mutateTo(mainTextController.morphTo('over the lazy dog'));
-    }, 2000);
+      mainPool.mutateTo(mainTextController.morphTo('THE QUICK BROWN FOX JUMPS\nOVER THE LAZY DOG'));
+    }, 3000);
 
     setTimeout(() => {
-      mainPool.moveTo(550, 510);
-    }, 4000);
-
-    setTimeout(() => {
-      mainPool.mutateTo(mainTextController.morphTo('THE QUICK BROWN FOX JUMPS'));
+      mainPool.mutateTo(mainTextController.morphTo('0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`'));
     }, 6000);
 
     setTimeout(() => {
-      mainPool.mutateTo(mainTextController.morphTo('OVER THE LAZY DOG'));
-    }, 8000);
-
-    setTimeout(() => {
-      mainPool.moveTo(1920/2,1080/2);
-    }, 10000);
-
-    setTimeout(() => {
       mainTextController.setFontSize(10);
-      mainPool.mutateTo(mainTextController.morphTo('!@#$%^&*() -_=+[]{}|;:,.<>?/~`'));
-    }, 12000);
+      mainPool.mutateTo(mainTextController.morphTo('hsrp.cc'));
+      mainPool.moveTo(1920/2,50);
+    }, 9000);
+
 
 
   </script>
