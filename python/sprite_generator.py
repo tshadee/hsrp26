@@ -4,14 +4,76 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+def skeletonize(img):
+    """
+    Iteratively thins a binary image to a 1-pixel wide skeleton
+    to emulate the center stroke of the shape.
+    """
+    skel = np.zeros(img.shape, np.uint8)
+    
+    # Ensure the image is strictly binary
+    _, img_thresh = cv2.threshold(img, 127, 255, 0)
+    
+    # Use a cross-shaped structuring element for skeletonization
+    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    
+    while True:
+        eroded = cv2.erode(img_thresh, element)
+        temp = cv2.dilate(eroded, element)
+        temp = cv2.subtract(img_thresh, temp)
+        skel = cv2.bitwise_or(skel, temp)
+        img_thresh = eroded.copy()
+        
+        # Stop when there are no more white pixels left to erode
+        if cv2.countNonZero(img_thresh) == 0:
+            break
+            
+    return skel
+
 def generate_typographic_sprites():
     # 1. Configuration
-    font_path = "C:/Windows/Fonts/SitkaVF.ttf"  # Ensure this points to a valid font
-    sprite_count = 100
+    # font_path = "C:/Windows/Fonts/SitkaVF.ttf"  # Ensure this points to a valid font
+    font_path = "python/NVMono.otf"
+    sprite_count = 50
     canvas_size = 300
-    charset = "abcdefghijklmnopqrstuvwxyz0123456789.!@#$%^&*() -_=+[]{}|;:,.<>?/~`"
+    charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.!@#$%^&*() -_=+[]{}|;:,.<>?/~`"
     output_dir = "./shapes/letters/"
-    
+
+    special_char_outputs = {
+        '?': 'question',
+        '/': 'slash',
+        '.': 'period',
+        '!': 'exclamation',
+        '@': 'at',
+        '#': 'hash',
+        '$': 'dollar',
+        '%': 'percent',
+        '^': 'caret',
+        '&': 'ampersand',
+        '*': 'asterisk',
+        '(': 'left_paren',
+        ')': 'right_paren',
+        ' ': 'space',
+        '\n': 'enter',
+        ',': 'comma', 
+        "'": 'apostrophe', 
+        '"': 'quotation',
+        ';': 'semicolon', 
+        ':': 'colon',
+        '<': 'less_than',
+        '>': 'greater_than',
+        '+': 'plus',
+        '=': 'equals',
+        '-': 'dash',
+        '{': 'left_brace',
+        '}': 'right_brace',
+        '[': 'left_bracket',
+        ']': 'right_bracket',
+        '|': 'pipe',
+        '~': 'tilde',
+        '`': 'backtick' 
+    }
+
     os.makedirs(output_dir, exist_ok=True)
 
     # 2. Setup Canvas & Font
@@ -60,11 +122,14 @@ def generate_typographic_sprites():
         # Convert to OpenCV format
         img_np = np.array(img)
 
-        # Find all outlines directly on the full canvas (no cropping, to preserve global position)
-        contours, _ = cv2.findContours(img_np, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+        # Skeletonize the image to find the center stroke instead of the outline
+        skeleton_img = skeletonize(img_np)
+
+        # Find all outlines on the thinned skeleton
+        contours, _ = cv2.findContours(skeleton_img, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
         if not contours:
-            print(f"Warning: No outlines found for '{char}'. Skipping.")
+            print(f"Warning: No strokes found for '{char}'. Skipping.")
             continue
 
         # Calculate the total perimeter length
@@ -116,23 +181,34 @@ def generate_typographic_sprites():
                 break
 
         # 5. Export Data
+        
+        # Determine safe filename
+        if char in special_char_outputs:
+            safe_name = special_char_outputs[char]
+        elif char.isupper():
+            safe_name = f"{char}_upper"
+        elif char.islower():
+            safe_name = f"{char}_lower"
+        else:
+            safe_name = char
+
         output_data = {
             "meta": {
-                "id": f"character_{char}",
+                "id": f"character_{safe_name}",
                 "spriteCount": len(sprites),
-                "description": f"Character '{char}' - Outline Traced & Typographically Aligned",
+                "description": f"Character '{char}' - Stroke Skeletonized & Typographically Aligned",
                 "coordinateSpace": "normalized_0_1"
             },
             "sprites": sprites
         }
 
-        filename = os.path.join(output_dir, f"{char}.sprites.json")
+        filename = os.path.join(output_dir, f"{safe_name}.sprites.json")
         with open(filename, 'w') as f:
             json.dump(output_data, f, indent=2)
 
         print(f"Generated {filename} ({len(sprites)} sprites)")
 
 if __name__ == "__main__":
-    print("Beginning aligned outline extraction pipeline...")
+    print("Beginning aligned skeleton extraction pipeline...")
     generate_typographic_sprites()
     print("Pipeline complete.")

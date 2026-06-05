@@ -56,7 +56,7 @@ class SpriteChild {
 
       // 1. Cubic Bezier Ease-In-Out Calculation
       const t = this.progress;
-      const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 1.1) / 2;
+      const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
 
       const globalDx = this.target.x - this.start.x;
       const globalDy = this.target.y - this.start.y;
@@ -258,7 +258,7 @@ export class LetterParent {
 
 export class WordParent {
   constructor(word, shapesBase = './shapes/letters/', fontSize = 16, densityFactor = 0.4) {
-    this.word = word.toLowerCase();
+    this.word = word; // Removed .toLowerCase() constraint
     this.shapesBase = shapesBase;
     this.fontSize = fontSize; 
     this.densityFactor = densityFactor;
@@ -272,20 +272,64 @@ export class WordParent {
 
   // Chaining method to update the text without creating a new instance
   morphTo(newWord) {
-    this.word = newWord.toLowerCase();
+    this.word = newWord; // Removed .toLowerCase() constraint
     return this; 
   }
 
   // Maps illegal/difficult characters to safe JSON filenames
   _sanitizeChar(char) {
-    const charMap = {
-      '.': 'dot',
-      '?': 'question',
-      '!': 'exclamation',
-      ',': 'comma',
-      '/': 'slash'
+    const specialCharOutputs = {
+        '?': 'question',
+        '/': 'slash',
+        '.': 'period',
+        '!': 'exclamation',
+        '@': 'at',
+        '#': 'hash',
+        '$': 'dollar',
+        '%': 'percent',
+        '^': 'caret',
+        '&': 'ampersand',
+        '*': 'asterisk',
+        '(': 'left_paren',
+        ')': 'right_paren',
+        ' ': 'space',
+        '\n': 'enter',
+        ',': 'comma', 
+        "'": 'apostrophe', 
+        '"': 'quotation',
+        ';': 'semicolon', 
+        ':': 'colon',
+        '<': 'less_than',
+        '>': 'greater_than',
+        '+': 'plus',
+        '=': 'equals',
+        '-': 'dash',
+        '{': 'left_brace',
+        '}': 'right_brace',
+        '[': 'left_bracket',
+        ']': 'right_bracket',
+        '|': 'pipe',
+        '~': 'tilde',
+        '`': 'backtick'
     };
-    return charMap[char] || char;
+
+    // 1. Check for special characters
+    if (specialCharOutputs[char]) {
+      return specialCharOutputs[char];
+    }
+    
+    // 2. Check for Uppercase Letters A-Z
+    if (/[A-Z]/.test(char)) {
+      return `${char}_upper`;
+    }
+    
+    // 3. Check for Lowercase Letters a-z
+    if (/[a-z]/.test(char)) {
+      return `${char}_lower`;
+    }
+
+    // 4. Fallback (Numbers 0-9)
+    return char;
   }
 
   async getLayout(canvasWidth, canvasHeight, spriteSize) {
