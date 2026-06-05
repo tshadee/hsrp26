@@ -32,8 +32,8 @@ def skeletonize(img):
 
 def generate_typographic_sprites():
     # 1. Configuration
-    # font_path = "C:/Windows/Fonts/SitkaVF.ttf"  # Ensure this points to a valid font
-    font_path = "python/NVMono.otf"
+    font_path = "C:/Windows/Fonts/cour.ttf"  # Ensure this points to a valid font
+    #font_path = "python/RogetaRegular.ttf"
     sprite_count = 50
     canvas_size = 300
     charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.!@#$%^&*() -_=+[]{}|;:,.<>?/~`"

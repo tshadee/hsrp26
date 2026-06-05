@@ -357,7 +357,7 @@ export class LetterParent {
 }
 
 export class SpriteWrite extends LayoutController {
-  constructor(text, shapesBase = './shapes/letters/', fontSize = 16, densityFactor = 0.4, justify = 'center') {
+  constructor(text, shapesBase = './shapes/letters/NVMono/', fontSize = 16, densityFactor = 0.4, justify = 'center') {
     super(); // Initialize the LayoutController base
     this.text = text; 
     this.shapesBase = shapesBase;

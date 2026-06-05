@@ -24,7 +24,7 @@
 
     const mount = document.getElementById('letter-mount');
     const mainPool = new SpritePool(mount, { maxSprites: 5000, spriteSize: 2 });
-    const textController = new SpriteWrite("Hello World!", './shapes/letters/', 14).attach(mainPool);
+    const textController = new SpriteWrite("Hello World!", './shapes/letters/NVMono/', 14).attach(mainPool);
 
     await mainPool.mutateTo(textController);
 
