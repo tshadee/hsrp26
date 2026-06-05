@@ -17,7 +17,7 @@ const monitorFPS = 60; // Default fallback value
 class SpriteChild {
   constructor() {
     this.curr = { x: 0, y: 0, a: 0 };
-    this.start = { x: 0, y: 0, a: 0 }; // Track origin for Bezier path
+    this.start = { x: 0, y: 0, a: 0 }; 
     this.target = { x: 0, y: 0, a: 0 };
     this.curlDirection = Math.random()*2 - 1;
     this.curlClockwise = Math.random()*2 - 1;
@@ -25,13 +25,12 @@ class SpriteChild {
     this.isDying = false;
     this.drag = 0.2 + Math.random() * 1.5; 
     
-    // Time-based variables for Bezier interpolation
-    this.progress = 1; // 0 to 1
-    this.speed = DEFAULT_SPRITE_SPEED*(60/monitorFPS) + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE*(60/monitorFPS); // Individual speed
+    this.progress = 1; 
+    this.speed = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE; 
+    this.shedThreshold = 2;
   }
 
   set(state) {
-    // Save current state as the starting point of the new journey
     this.start.x = this.curr.x;
     this.start.y = this.curr.y;
     this.start.a = this.curr.a;
@@ -40,20 +39,22 @@ class SpriteChild {
     if (state.y !== undefined) this.target.y = state.y;
     if (state.a !== undefined) this.target.a = state.a; 
 
-    // Reset progress and randomize speed slightly to break up rigid formations
     this.progress = 0; 
-    this.speed = DEFAULT_SPRITE_SPEED*(60/monitorFPS) + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE*(60/monitorFPS);
-
-    
+    this.speed = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
   }
 
-  update() {
+  update(timeScale = 1) {
     if (this.isDying) {
       const oldX = this.curr.x;
       const oldY = this.curr.y;
-      this.curr.x += 0.01;
-      this.curr.y += 0.01;
-      this.curr.a += (0 - this.curr.a) * 0.01;
+      
+      // Scale linear movement
+      this.curr.x += 0.01 * timeScale;
+      this.curr.y += 0.01 * timeScale;
+      
+      // Frame-independent exponential decay for alpha
+      const deathDecay = 1 - Math.pow(1 - 0.01, timeScale);
+      this.curr.a += (0 - this.curr.a) * deathDecay;
       
       const globalDx = this.curr.x - oldX;
       const globalDy = this.curr.y - oldY;
@@ -66,31 +67,25 @@ class SpriteChild {
       return;
     }
 
-    // Capture old position before applying math (needed for kinetic alpha)
     const oldX = this.curr.x;
     const oldY = this.curr.y;
 
     if (this.progress < 1) {
-      // Advance progress based on individual speed and drag
-      this.progress += this.speed * this.drag;
+      // Scale bezier progress increment
+      this.progress += this.speed * this.drag * timeScale;
       if (this.progress > 1) this.progress = 1;
 
-      // 1. Cubic Bezier Ease-In-Out Calculation
       const t = this.progress;
       const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
 
       const globalDx = this.target.x - this.start.x;
       const globalDy = this.target.y - this.start.y;
 
-      // The theoretical Bezier position
       const baseX = this.start.x + globalDx * ease;
       const baseY = this.start.y + globalDy * ease;
 
-      // 2. School of Fish Turbulence (Chaos)
-      // Peaks at t=0.5, collapses to 0 at t=0 and t=1
       const turbulenceForce = Math.sin(t * Math.PI); 
       
-      // Create a perpendicular swerve relative to their travel vector
       const swerveStrength = this.curlDirection * 0.05 * turbulenceForce * this.drag; 
       const curlX = -globalDy * swerveStrength;
       const curlY = globalDx * swerveStrength;
@@ -99,13 +94,12 @@ class SpriteChild {
       this.curr.y = baseY + curlY;
     }
 
-    // Calculate actual pixel speed for the kinetic alpha
-    const vx = this.curr.x - oldX;
-    const vy = this.curr.y - oldY;
+    // Convert pixel speed back to a per-frame equivalent so kinetic alpha feels the same
+    const vx = (this.curr.x - oldX) / timeScale;
+    const vy = (this.curr.y - oldY) / timeScale;
     const speed = Math.hypot(vx, vy);
     const dist = Math.hypot(this.target.x - this.curr.x, this.target.y - this.curr.y);
 
-    // Kinetic Alpha & Deadzone logic remains mostly untouched
     const kineticAlpha = 0.1 + (speed / 10) * 1.8;
     const clampedKineticAlpha = Math.max(0.1, Math.min(1.5, kineticAlpha));
 
@@ -117,7 +111,10 @@ class SpriteChild {
     }
 
     const desiredAlpha = (1 - deadzoneMix) * clampedKineticAlpha + deadzoneMix * this.target.a;
-    this.curr.a += (desiredAlpha - this.curr.a) * 0.2;
+    
+    // Frame-independent exponential ease for kinetic alpha
+    const alphaEase = 1 - Math.pow(1 - 0.2, timeScale);
+    this.curr.a += (desiredAlpha - this.curr.a) * alphaEase;
   }
 }
 
@@ -127,8 +124,6 @@ export class SpritePool {
   constructor(mountEl, options = {}) {
     this.mountEl = mountEl;
     this.spriteSize = options.spriteSize ?? 3;
-    
-    // Configurable per pool! Essential for multi-pool performance.
     this.maxSprites = options.maxSprites ?? 1500; 
     
     this.canvas = document.createElement('canvas');
@@ -142,10 +137,12 @@ export class SpritePool {
     window.addEventListener('resize', () => this._onResize());
 
     this.sprites = [];
-    // Only generate what this specific pool needs
     for (let i = 0; i < this.maxSprites; i++) {
       this.sprites.push(new SpriteChild()); 
     }
+
+    // Initialize timestamp tracking
+    this.lastTime = performance.now();
 
     this._renderLoop = this._renderLoop.bind(this);
     requestAnimationFrame(this._renderLoop);
@@ -193,47 +190,109 @@ export class SpritePool {
     
     const offsetX = this.layoutCenterX - (this.width / 2);
     const offsetY = this.layoutCenterY - (this.height / 2);
+    const dither = 10; 
 
-    shuffleArray(newLayout);
-    shuffleArray(this.sprites);
+    // 1. Sort targets spatially
+    const targets = newLayout.map(pt => ({
+      x: pt.x + offsetX,
+      y: pt.y + offsetY,
+      a: pt.a ?? 1,
+      sortKey: (pt.x + pt.y) + (Math.random() * dither - dither / 2)
+    })).sort((a, b) => a.sortKey - b.sortKey);
 
-    const neededSprites = newLayout.length;
-
-    // Use this.maxSprites instead of a global constant
+    // 2. Separate active (guides) from dead (reserves)
+    const activeSprites = [];
+    const deadSprites = [];
+    
     for (let i = 0; i < this.maxSprites; i++) {
       const sprite = this.sprites[i];
-
-      if (i < neededSprites) {
-        const pt = newLayout[i];
-
-        if (sprite.target.a === 0) {
-          sprite.curr.x = this.layoutCenterX + (Math.random() * 17 - 15);
-          sprite.curr.y = this.layoutCenterY + (Math.random() * 17 - 15);
-          sprite.curr.a = 0;
-          sprite.drag = 0.2 + Math.random() * 1.5;
-        }
-
-        sprite.isDying = false;
-        sprite.set({ x: pt.x + offsetX, y: pt.y + offsetY, a: pt.a ?? 1 });
-
+      // Consider it active if it is visible or currently on a valid journey
+      if (sprite.curr.a > 0.01 || sprite.target.a > 0) {
+        activeSprites.push({
+          sprite,
+          sortKey: (sprite.curr.x + sprite.curr.y) + (Math.random() * dither - dither / 2)
+        });
       } else {
-        if (sprite.target.a > 0) {
-          sprite.isDying = true;
-          sprite.drag = 0.2 + Math.random() * 1.5;
-          sprite.set({ a: 0 }); 
-        }
+        deadSprites.push(sprite);
       }
+    }
+    
+    // Sort our active guides spatially to map neatly to targets
+    activeSprites.sort((a, b) => a.sortKey - b.sortKey);
+
+    const neededCount = targets.length;
+    const activeCount = activeSprites.length;
+
+    // 3. Map Active Guides & Handle Excess Shedding
+    for (let i = 0; i < activeCount; i++) {
+      const sprite = activeSprites[i].sprite;
+      sprite.isDying = false;
+      sprite.shedThreshold = 2; // Reset shedding threshold
+
+      if (i < neededCount) {
+        // Valid guide sprite maps cleanly to its target
+        const pt = targets[i];
+        sprite.set({ x: pt.x, y: pt.y, a: pt.a });
+      } else {
+        // Excess sprite: Assign to a random valid target so it travels with the pack
+        const randomTarget = targets[Math.floor(Math.random() * neededCount)];
+        
+        // It seeks the pack, but fades out naturally if it somehow survives the trip
+        sprite.set({ x: randomTarget.x, y: randomTarget.y, a: 0 }); 
+        
+        // Program the sprite to trigger its death curl between 20% and 80% of the journey
+        sprite.shedThreshold = 0.1 + Math.random() * 0.2; 
+      }
+    }
+
+    // 4. Handle Growth (drawing upon space around guides)
+    let spawnedCount = 0;
+    while (activeCount + spawnedCount < neededCount && deadSprites.length > 0) {
+      const sprite = deadSprites.pop();
+      const pt = targets[activeCount + spawnedCount];
+      
+      if (activeCount > 0) {
+        // Pick a random guide from the valid active pool
+        const guideIndex = Math.floor(Math.random() * Math.min(activeCount, neededCount));
+        const guide = activeSprites[guideIndex].sprite;
+        
+        // Spawn near the guide with a dither radius
+        sprite.curr.x = guide.curr.x + (Math.random() * 30 - 20);
+        sprite.curr.y = guide.curr.y + (Math.random() * 30 - 20);
+      } else {
+        // Absolute fallback if mutating from an empty screen
+        sprite.curr.x = this.layoutCenterX;
+        sprite.curr.y = this.layoutCenterY;
+      }
+
+      sprite.curr.a = 0; // Ensure it fades in
+      sprite.isDying = false;
+      sprite.shedThreshold = 2;
+      sprite.drag = 0.2 + Math.random() * 1.5;
+      sprite.set({ x: pt.x, y: pt.y, a: pt.a });
+      
+      spawnedCount++;
     }
   }
 
-  _renderLoop() {
+  _renderLoop(timestamp) {
+    // Calculate delta time
+    const dt = timestamp - this.lastTime;
+    this.lastTime = timestamp;
+    
+    // Cap dt to prevent explosions if the user switches browser tabs
+    const cappedDt = Math.min(dt, 100); 
+    // 16.666ms is 1 frame at 60fps. This yields a multiplier near 1.0 on standard monitors.
+    const timeScale = cappedDt / 16.666; 
+
     this.ctx.clearRect(0, 0, this.width, this.height);
     this.ctx.fillStyle = 'rgba(255, 255, 255, 1)';
 
-    // Loop capped at this pool's maximum
     for (let i = 0; i < this.maxSprites; i++) {
       const sprite = this.sprites[i];
-      sprite.update(); 
+      
+      // Pass the scale into the update loop
+      sprite.update(timeScale); 
 
       const a = sprite.curr.a;
       if (a < 0.01) continue; 

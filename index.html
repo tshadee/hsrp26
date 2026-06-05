@@ -29,21 +29,29 @@
     await mainPool.mutateTo(textController);
 
     setTimeout(() => {
-      textController.morphTo('THE QUICK BROWN FOX JUMPS\nOVER THE LAZY DOG');
-    }, 5000);
+      textController.morphTo('hsrp26');
+    }, 3000);
 
     setTimeout(() => {
-      textController.morphTo('0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`');
-    }, 8000);
+      textController.morphTo('hsrp26.cc');
+    }, 6000);
 
     setTimeout(() => {
       //mainTextController.setFontSize(10);
-      textController.morphTo('hsrp.cc');
-    }, 11000);
+      textController.morphTo('hsrp26.ccc');
+    }, 9000);
 
     setTimeout(() => {
-      mainPool.moveTo(150,50);
-    }, 14000);
+      textController.morphTo('0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`');
+    }, 12000);
+
+    setTimeout(() => {
+      textController.morphTo('the quick brown fox\njumps over the lazy dog');
+    }, 15000);
+
+    setTimeout(() => {
+      textController.morphTo('THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG');
+    }, 18000);
 
 
 
