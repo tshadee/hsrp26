@@ -3,27 +3,35 @@
 export class SpritePool {
   constructor(mountEl, options = {}) {
     this.mountEl = mountEl;
+    this.fullScreen = options.fullScreen !== false; // Defaults to true
     
-    // 1. Create the full-screen overlay canvas
     this.canvas = document.createElement('canvas');
-    this.canvas.style.position = 'fixed';
-    this.canvas.style.top = '0';
-    this.canvas.style.left = '0';
-    this.canvas.style.width = '100vw';
-    this.canvas.style.height = '100vh';
-    this.canvas.style.pointerEvents = 'none'; // Pass clicks to HTML beneath
+    this.canvas.style.pointerEvents = 'none';
     this.canvas.style.zIndex = '10';
+
+    if (this.fullScreen) {
+      this.canvas.style.position = 'fixed';
+      this.canvas.style.top = '0';
+      this.canvas.style.left = '0';
+      this.canvas.style.width = '100vw';
+      this.canvas.style.height = '100vh';
+      document.body.appendChild(this.canvas);
+    } else {
+      this.canvas.style.position = 'absolute';
+      this.canvas.style.top = '0';
+      this.canvas.style.left = '0';
+      this.canvas.style.width = '100%';
+      this.canvas.style.height = '100%';
+      // Ensure the mount element can contain absolute children
+      if (getComputedStyle(this.mountEl).position === 'static') {
+        this.mountEl.style.position = 'relative';
+      }
+      this.mountEl.appendChild(this.canvas);
+    }
     
-    // Append to body rather than the mountEl so it guarantees overlay behavior
-    document.body.appendChild(this.canvas);
-    
-    // 2. Detach canvas and hand it to the Worker
     const offscreen = this.canvas.transferControlToOffscreen();
-    
-    // Create the worker (Make sure the path matches your structure)
     this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     
-    // 3. Initialize the Worker Engine
     this.worker.postMessage({
       type: 'INIT',
       canvas: offscreen,
@@ -31,51 +39,55 @@ export class SpritePool {
         spriteSize: options.spriteSize ?? 3,
         maxSprites: options.maxSprites ?? 1500
       }
-    }, [offscreen]); // The canvas must be passed in the transfer array
+    }, [offscreen]);
 
-    // 4. Setup sensors
     this._setupDOMTracking();
     this._setupInputSensors();
   }
 
   _setupDOMTracking() {
-    // ResizeObserver watches for ANY CSS changes that shift the element (flexbox changes, window resize, etc.)
     const observer = new ResizeObserver(() => {
       const rect = this.mountEl.getBoundingClientRect();
       this.worker.postMessage({
         type: 'UPDATE_BOUNDS',
         bounds: {
-          width: rect.width,
-          height: rect.height,
-          originX: rect.left + rect.width / 2,
-          originY: rect.top + rect.height / 2,
-          windowWidth: window.innerWidth,
-          windowHeight: window.innerHeight
+          width: this.fullScreen ? window.innerWidth : rect.width,
+          height: this.fullScreen ? window.innerHeight : rect.height,
+          // Localized canvases use their own center point
+          originX: this.fullScreen ? rect.left + rect.width / 2 : rect.width / 2,
+          originY: this.fullScreen ? rect.top + rect.height / 2 : rect.height / 2,
+          windowWidth: this.fullScreen ? window.innerWidth : rect.width,
+          windowHeight: this.fullScreen ? window.innerHeight : rect.height
         }
       });
     });
     observer.observe(this.mountEl);
-    
-    // Also trigger immediately to get initial coordinates
     window.dispatchEvent(new Event('resize')); 
   }
 
   _setupInputSensors() {
-    // Listen to global mouse movements and send them instantly to this specific pool's worker
     window.addEventListener('mousemove', (e) => {
-      this.worker.postMessage({
-        type: 'POINTER_MOVE',
-        x: e.clientX,
-        y: e.clientY
-      });
+      let x = e.clientX;
+      let y = e.clientY;
+      
+      // Calculate local mouse coordinates if not fullscreen
+      if (!this.fullScreen) {
+        const rect = this.mountEl.getBoundingClientRect();
+        x = e.clientX - rect.left;
+        y = e.clientY - rect.top;
+      }
+
+      this.worker.postMessage({ type: 'POINTER_MOVE', x, y });
     });
 
     window.addEventListener('mousedown', (e) => {
-      this.worker.postMessage({
-        type: 'POINTER_DOWN',
-        x: e.clientX,
-        y: e.clientY
-      });
+      let x = e.clientX, y = e.clientY;
+      if (!this.fullScreen) {
+        const rect = this.mountEl.getBoundingClientRect();
+        x = e.clientX - rect.left;
+        y = e.clientY - rect.top;
+      }
+      this.worker.postMessage({ type: 'POINTER_DOWN', x, y });
     });
   }
 
@@ -120,8 +132,12 @@ export class SpriteWrite {
     };
   }
 
-  attach(pool) {
-    this.pool = pool;
+  attach(parent) {
+    if (parent.type === 'SpriteGroup') {
+      this.group = parent;
+    } else {
+      this.pool = parent;
+    }
     return this;
   }
 
@@ -151,15 +167,15 @@ export class SpriteWrite {
 
   async morphTo(newText, forceFlicker = false) {
     if (this.config.text === newText && !forceFlicker) return this;
-    
     this.config.text = newText;
     
-    if (this.pool) {
+    if (this.group) {
+      await this.group.refresh();
+    } else if (this.pool) {
       await this.pool.mutateTo(this);
     } else {
-      console.warn("SpriteWrite morphed, but it isn't attached to a SpritePool.");
+      console.warn("SpriteWrite morphed, but it isn't attached.");
     }
-    
     return this;
   }
 }
@@ -176,11 +192,14 @@ export class SpriteImage {
     };
   }
 
-  attach(pool) {
-    this.pool = pool;
+  attach(parent) {
+    if (parent.type === 'SpriteGroup') {
+      this.group = parent;
+    } else {
+      this.pool = parent;
+    }
     return this;
   }
-
   setScale(scale) {
     this.config.scale = scale;
     return this;
@@ -195,17 +214,54 @@ export class SpriteImage {
     return this.config;
   }
 
-  async morphTo(newFilename, forceFlicker = false) {
-    if (this.config.filename === newFilename && !forceFlicker) return this;
+  async morphTo(newText, forceFlicker = false) {
+    if (this.config.text === newText && !forceFlicker) return this;
+    this.config.text = newText;
     
-    this.config.filename = newFilename;
-    
-    if (this.pool) {
+    if (this.group) {
+      await this.group.refresh();
+    } else if (this.pool) {
       await this.pool.mutateTo(this);
     } else {
-      console.warn("SpriteImage morphed, but it isn't attached to a SpritePool.");
+      console.warn("SpriteWrite morphed, but it isn't attached.");
     }
-    
     return this;
+  }
+}
+
+export class SpriteGroup {
+  constructor() {
+    this.type = 'SpriteGroup';
+    this.pool = null;
+    this.children = [];
+  }
+
+  attach(pool) {
+    this.pool = pool;
+    return this;
+  }
+
+  add(layoutController, mountEl) {
+    layoutController.attach(this);
+    this.children.push({ controller: layoutController, mountEl });
+    return this;
+  }
+
+  getConfig() {
+    return {
+      children: this.children.map(c => {
+        const rect = c.mountEl.getBoundingClientRect();
+        return {
+          type: c.controller.type,
+          config: c.controller.getConfig(),
+          offsetX: rect.left + rect.width / 2,
+          offsetY: rect.top + rect.height / 2
+        };
+      })
+    };
+  }
+
+  async refresh() {
+    if (this.pool) await this.pool.mutateTo(this);
   }
 }

@@ -93,8 +93,10 @@ export class SpritePool {
     // Allocate memory
     this.data = new Float32Array(this.maxSprites * STRIDE);
     this.activeIndices = new Int32Array(this.maxSprites);
-    this.activeKeys = new Float32Array(this.maxSprites * STRIDE);
+    this.activeHashes = new Float64Array(this.maxSprites * STRIDE); // Float64 handles massive integer hashes
+    this.freeIndices = new Int32Array(this.maxSprites);
     this.deadIndices = new Int32Array(this.maxSprites);
+    this.remainingTargets = []; // Reusable array for leftover targets
     
     // Initialize standard randoms once
     for (let i = 0; i < this.maxSprites; i++) {
@@ -207,123 +209,143 @@ export class SpritePool {
     }
 
     const newLayout = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
-    
     if (currentMutateId !== this.mutateId) return;
     
     const offsetX = this.layoutCenterX || 0;
     const offsetY = this.layoutCenterY || 0;
 
-    const targets = newLayout.map(pt => ({
-      x: pt.x + offsetX,
-      y: pt.y + offsetY,
-      a: pt.a ?? 1
-    }));
+    let activeCount = 0;
+    let deadCount = 0;
 
-    const targetMap = new Map();
-    for (const pt of targets) {
-      const key = `${Math.round(pt.x)},${Math.round(pt.y)}`;
-      if (!targetMap.has(key)) targetMap.set(key, []);
-      targetMap.get(key).push(pt);
-    }
-
-    const freeActiveIndices = [];
-    const deadIndices = [];
-    const dither = 10; 
-
-    // Match existing active sprites to stationary targets
+    // 1. Calculate EXACT Integer Hashes
     for (let i = 0; i < this.maxSprites; i++) {
       let idx = i * STRIDE;
       
       if (this.data[idx + A] > 0.01 || this.data[idx + TA] > 0) {
-        const key = `${Math.round(this.data[idx + TX])},${Math.round(this.data[idx + TY])}`;
-        const bin = targetMap.get(key);
-
-        if (bin && bin.length > 0) {
-          const matchedTarget = bin.pop(); 
-          this.data[idx + DYING] = 0;
-          this.data[idx + SHED] = 2;
-          this.setSpriteTarget(idx, matchedTarget.x, matchedTarget.y, matchedTarget.a);
-        } else {
-          freeActiveIndices.push({
-            idx: idx,
-            sortKey: (this.data[idx + X] + this.data[idx + Y]) + (Math.random() * dither - dither / 2)
-          });
-        }
+        this.activeIndices[activeCount] = idx;
+        
+        // Integer Hashing: Replaces the old `${x},${y}` string map
+        const rx = Math.round(this.data[idx + TX]) + 10000;
+        const ry = Math.round(this.data[idx + TY]) + 10000;
+        this.activeHashes[idx] = (ry * 100000) + rx;
+        
+        activeCount++;
       } else {
-        deadIndices.push(idx);
+        this.deadIndices[deadCount] = idx;
+        deadCount++;
       }
     }
 
-    const remainingTargets = [];
-    for (const bin of targetMap.values()) {
-      for (const pt of bin) {
-        remainingTargets.push({
-          ...pt,
-          sortKey: (pt.x + pt.y) + (Math.random() * dither - dither / 2)
-        });
-      }
+    // 2. Sort Active Sprites by Hash
+    const activeView = this.activeIndices.subarray(0, activeCount);
+    activeView.sort((idxA, idxB) => this.activeHashes[idxA] - this.activeHashes[idxB]);
+
+    // 3. Prepare and Sort Targets by Hash
+    const targetCount = newLayout.length;
+    for (let i = 0; i < targetCount; i++) {
+       const pt = newLayout[i];
+       
+       // Detect absolute coordinates from SpriteGroups
+       pt.tx = pt.isAbsolute ? pt.x : pt.x + offsetX;
+       pt.ty = pt.isAbsolute ? pt.y : pt.y + offsetY;
+       
+       const rx = Math.round(pt.tx) + 10000;
+       const ry = Math.round(pt.ty) + 10000;
+       pt.hash = (ry * 100000) + rx;
     }
+    newLayout.sort((a, b) => a.hash - b.hash);
+
+    // 4. Two-Pointer Exact Intersection (The "Locking" Phase)
+    let pA = 0; // Pointer for Active
+    let pT = 0; // Pointer for Targets
+    let freeCount = 0;
     
-    remainingTargets.sort((a, b) => a.sortKey - b.sortKey);
-    freeActiveIndices.sort((a, b) => a.sortKey - b.sortKey);
+    // Clear reusable array safely
+    this.remainingTargets.length = 0; 
 
-    const neededCount = remainingTargets.length;
-    const freeCount = freeActiveIndices.length;
+    while (pA < activeCount && pT < targetCount) {
+      let idx = activeView[pA];
+      let hashA = this.activeHashes[idx];
+      let target = newLayout[pT];
+      let hashT = target.hash;
+
+      if (hashA === hashT) {
+        // EXACT MATCH: Lock the sprite in place
+        this.data[idx + DYING] = 0;
+        this.data[idx + SHED] = 2;
+        this.setSpriteTarget(idx, target.tx, target.ty, target.a ?? 1);
+        pA++; 
+        pT++;
+      } else if (hashA < hashT) {
+        // Active sprite has no matching target (Free Agent)
+        this.freeIndices[freeCount++] = idx;
+        pA++;
+      } else {
+        // Target has no matching sprite (Unclaimed)
+        this.remainingTargets.push(target);
+        pT++;
+      }
+    }
+
+    // Sweep up leftovers
+    while (pA < activeCount) this.freeIndices[freeCount++] = activeView[pA++];
+    while (pT < targetCount) this.remainingTargets.push(newLayout[pT++]);
+
+    // 5. The Migration Phase (For changed pixels only)
+    const remainingCount = this.remainingTargets.length;
+    const dither = 10;
+
+    // Sort leftovers spatially to prevent criss-crossing (Restoring your original x+y logic)
+    const freeView = this.freeIndices.subarray(0, freeCount);
+    freeView.sort((idxA, idxB) => (this.data[idxA + X] + this.data[idxA + Y]) - (this.data[idxB + X] + this.data[idxB + Y]));
+    this.remainingTargets.sort((a, b) => (a.tx + a.ty) - (b.tx + b.ty));
 
     for (let i = 0; i < freeCount; i++) {
-      let idx = freeActiveIndices[i].idx;
+      let idx = freeView[i];
       this.data[idx + DYING] = 0;
       this.data[idx + SHED] = 2; 
 
-      if (i < neededCount) {
-        const pt = remainingTargets[i];
-        this.setSpriteTarget(idx, pt.x, pt.y, pt.a);
+      if (i < remainingCount) {
+        const pt = this.remainingTargets[i];
+        this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1);
       } else {
+        // Excess sprites shed
         let randomTarget;
-        if (remainingTargets.length > 0) {
-          randomTarget = remainingTargets[Math.floor(Math.random() * remainingTargets.length)];
-        } else if (targets.length > 0) {
-          randomTarget = targets[Math.floor(Math.random() * targets.length)];
+        if (remainingCount > 0) {
+          randomTarget = this.remainingTargets[Math.floor(Math.random() * remainingCount)];
+        } else if (targetCount > 0) {
+          randomTarget = newLayout[Math.floor(Math.random() * targetCount)];
         } else {
-          randomTarget = { x: this.layoutCenterX, y: this.layoutCenterY, a: 0 };
+          randomTarget = { tx: this.layoutCenterX, ty: this.layoutCenterY, a: 0 };
         }
-        
-        this.setSpriteTarget(idx, randomTarget.x, randomTarget.y, 0); 
+        this.setSpriteTarget(idx, randomTarget.tx, randomTarget.ty, 0); 
         this.data[idx + SHED] = 0.1 + Math.random() * 0.2; 
       }
     }
 
+    // 6. Spawn Phase
     let spawnedCount = 0;
-    while (freeCount + spawnedCount < neededCount && deadIndices.length > 0) {
-      let idx = deadIndices.pop();
-      const pt = remainingTargets[freeCount + spawnedCount];
+    while (freeCount + spawnedCount < remainingCount && deadCount > 0) {
+      deadCount--;
+      let idx = this.deadIndices[deadCount]; 
+      const pt = this.remainingTargets[freeCount + spawnedCount];
       
       let guideIdx = -1;
       if (freeCount > 0) {
-        const guideListIndex = Math.floor(Math.random() * Math.min(freeCount, neededCount));
-        guideIdx = freeActiveIndices[guideListIndex].idx;
-      } else {
-        // Fallback: Find a random active sprite
-        const activeIndices = [];
-        for(let j=0; j<this.maxSprites; j++) {
-            if(this.data[j*STRIDE + TA] > 0) activeIndices.push(j*STRIDE);
-        }
-        if (activeIndices.length > 0) {
-           guideIdx = activeIndices[Math.floor(Math.random() * activeIndices.length)];
-        }
+        guideIdx = freeView[Math.floor(Math.random() * freeCount)];
       }
 
       if (guideIdx !== -1) {
         const angle = Math.random() * Math.PI * 2; 
-        const minRadius = 20;
-        const maxRadius = 50; 
-        const radius = minRadius + Math.random() * (maxRadius - minRadius); 
-
+        const radius = 20 + Math.random() * 30; 
         this.data[idx + X] = this.data[guideIdx + X] + Math.cos(angle) * radius;
         this.data[idx + Y] = this.data[guideIdx + Y] + Math.sin(angle) * radius;
       } else {
-        this.data[idx + X] = this.layoutCenterX || 0;
-        this.data[idx + Y] = this.layoutCenterY || 0;
+        // Spawn in a dithered sphere around the intended target coordinate
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 20 + Math.random() * 30; // Adjust radius here for wider/tighter initial spawn
+        this.data[idx + X] = pt.tx + Math.cos(angle) * radius;
+        this.data[idx + Y] = pt.ty + Math.sin(angle) * radius;
       }
 
       this.data[idx + A] = 0; 
@@ -331,8 +353,7 @@ export class SpritePool {
       this.data[idx + SHED] = 2; 
       this.data[idx + DRAG] = 0.2 + Math.random() * 1.5;
       
-      this.setSpriteTarget(idx, pt.x, pt.y, pt.a);
-      
+      this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1);
       spawnedCount++;
     }
   }
@@ -718,15 +739,43 @@ self.onmessage = async (e) => {
       break;
     case 'MORPH':
       if (pool) {
-        // Route the config to the correct local layout generator based on type
-        if (data.layoutType === 'SpriteWrite') {
-          const generator = new SpriteWrite(data.config);
-          await pool.mutateTo(generator);
-        } else if (data.layoutType === 'SpriteImage') {
-          const generator = new SpriteImage(data.config);
-          await pool.mutateTo(generator);
-        }
+        let generator;
+        if (data.layoutType === 'SpriteWrite') generator = new SpriteWrite(data.config);
+        else if (data.layoutType === 'SpriteImage') generator = new SpriteImage(data.config);
+        else if (data.layoutType === 'SpriteGroup') generator = new SpriteGroup(data.config); // Add this
+        
+        if (generator) await pool.mutateTo(generator);
       }
       break;
   }
 };
+
+export class SpriteGroup extends LayoutController {
+  constructor(config) {
+    super();
+    this.children = config.children;
+  }
+
+  async getLayout(containerWidth, containerHeight, spriteSize) {
+    const finalLayout = [];
+    
+    for (const child of this.children) {
+      let generator;
+      if (child.type === 'SpriteWrite') generator = new SpriteWrite(child.config);
+      else if (child.type === 'SpriteImage') generator = new SpriteImage(child.config);
+
+      if (generator) {
+        const layout = await generator.getLayout(containerWidth, containerHeight, spriteSize);
+        for (const pt of layout) {
+          finalLayout.push({
+            x: pt.x + child.offsetX,
+            y: pt.y + child.offsetY,
+            a: pt.a,
+            isAbsolute: true // Flag to bypass the global pool offset
+          });
+        }
+      }
+    }
+    return finalLayout;
+  }
+}

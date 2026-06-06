@@ -43,17 +43,11 @@
   <!-- ── Page ──────────────────────────────────────────────────────────────── -->
   <main class="hero">
 
-    <header>
-      <div id="hero-mount" class="hero-mount" aria-label="hero display"></div>
-    </header>
+        <div id="hero-left-arrow" class="hero-arrow"></div>
+        <div id="hero-mount" class="hero-mount" aria-label="hero display"></div>
+        <div id="hero-right-arrow" class="hero-arrow"></div>
 
   </main>
-
-  <footer>
-    <div class="footer-container">
-    
-    </div>
-  </footer>
 
   <!-- ──  engine  ────────────────────────────────────────── -->
 <script type="module">
@@ -67,7 +61,7 @@
     'question', 'slash', 'period', 'exclamation', 'at', 'hash', 'dollar', 'percent', 'caret', 'ampersand', 'asterisk', 'left_paren', 'right_paren', 'space', 'comma', 'apostrophe', 'quotation', 'semicolon', 'colon', 'less_than', 'greater_than', 'plus', 'equals', 'dash', 'left_brace', 'right_brace', 'left_bracket', 'right_bracket', 'pipe', 'tilde', 'backtick'
   ];
   
-  const images = ['hsrp-logo', 'sample_map']; // Add your 10k point images here
+  const images = ['hsrp-logo', 'hsrp-logo-inverted', 'hsrp-logo-reduced', 'hsrp-logo-reduced-inverted']; // Add your 10k point images here
 
   // Build the full URLs
   const urlsToFetch = [
@@ -125,7 +119,7 @@
 
   // ─── MAIN ENGINE (Only runs when called) ────────────────────────
   
-  import { SpritePool, SpriteWrite, SpriteImage } from './js files/main.js';
+  import { SpritePool, SpriteWrite, SpriteImage , SpriteGroup } from './js files/main.js';
 
   async function startWebsite() {
 
@@ -137,35 +131,46 @@
 
     // ── Logo Pool ──
     const navLogoMount = document.getElementById('pool-hsrp-logo');
-    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 1000, spriteSize: 1});
+    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 5000, spriteSize: 1});
     const navLogoText = new SpriteWrite("hsrp26", 8).attach(navLogoPool);
-    const navLogoImage = new SpriteImage("hsrp-logo", 50).attach(navLogoPool); // Set scale to 100px or whatever fits your nav
+    const navLogoImage = new SpriteImage("hsrp-logo-reduced-inverted", 50).attach(navLogoPool); // Set scale to 100px or whatever fits your nav
 
-    // ── Navigation Pools ──
-    const navMount1 = document.getElementById('pool-nav-1');
-    const navPool1 = new SpritePool(navMount1, { maxSprites: 500, spriteSize: 1 });
-    const navPool1Text = new SpriteWrite("home", 8).attach(navPool1);
+    // ── Single UI Group ── (Replaces Nav 1, 2, 3 and both Arrows)
+    // We attach this pool to the body because it spans across multiple DOM regions
+    const uiPool = new SpritePool(document.body, { maxSprites: 2500, spriteSize: 1, fullScreen: true });
+    const uiGroup = new SpriteGroup().attach(uiPool);
 
-    const navMount2 = document.getElementById('pool-nav-2');
-    const navPool2 = new SpritePool(navMount2, { maxSprites: 500, spriteSize: 1 });
-    const navPool2Text = new SpriteWrite("settings", 8).attach(navPool2);
+    const navText1 = new SpriteWrite("home", 8);
+    const navText2 = new SpriteWrite("settings", 8);
+    const navText3 = new SpriteWrite("about", 8);
+    const arrowLeft = new SpriteWrite("<", 15);
+    const arrowRight = new SpriteWrite(">", 15);
 
-    const navMount3 = document.getElementById('pool-nav-3');
-    const navPool3 = new SpritePool(navMount3, { maxSprites: 500, spriteSize: 1 });
-    const navPool3Text = new SpriteWrite("about", 8).attach(navPool3);
+    // Mount them to their respective visual origins
+    uiGroup.add(navText1, document.getElementById('pool-nav-1'));
+    uiGroup.add(navText2, document.getElementById('pool-nav-2'));
+    uiGroup.add(navText3, document.getElementById('pool-nav-3'));
+    uiGroup.add(arrowLeft, document.getElementById('hero-left-arrow'));
+    uiGroup.add(arrowRight, document.getElementById('hero-right-arrow'));
 
-    // ── Clock Pool ──
+    // ── Localized Clock Pool ──
     const navMountTime = document.getElementById('pool-nav-time');
-    const navPoolTime = new SpritePool(navMountTime, { maxSprites: 1000, spriteSize: 1});
+    // NOTE: fullScreen is false! It will size itself to the DOM element container.
+    const navPoolTime = new SpritePool(navMountTime, { maxSprites: 1000, spriteSize: 1, fullScreen: true });
     const navPoolTimeText = new SpriteWrite("00:00:00 am", 8).attach(navPoolTime);
 
     // Initial Mutations
     await heroPool.mutateTo(heroPoolImage);
     await navLogoPool.mutateTo(navLogoImage);
-    await navPool1.mutateTo(navPool1Text);
-    await navPool2.mutateTo(navPool2Text);
-    await navPool3.mutateTo(navPool3Text);
     await navPoolTime.mutateTo(navPoolTimeText);
+    await uiGroup.refresh(); // Generates all 5 texts instantly in a single layout
+
+    // Auto-recalculate absolute coordinates for the UI group on resize
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => uiGroup.refresh(), 150);
+    });
 
     let lastSecondUpdated = -1;
 
@@ -215,23 +220,18 @@
           '0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`',
           'the quick brown fox\njumps over the lazy dog',
           'THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG',
-          'This is a test website\nnot much to see yet',
-          'There are some test strings cycling through',
-          'Feel free to watch them morph',
-          'A',
-          'B',
-          'C',
-          'D',
-          '10:00',
-          '11:11',
-          '12:34',
-          '07:31'
+          'x'
         ];
   
         let index = 0;
   
         setInterval(() => {
-          heroPoolText.morphTo(texts[index]);
+          if (index == 5){
+            heroPool.mutateTo(heroPoolImage);
+          }
+          else {
+            heroPoolText.morphTo(texts[index]);
+          }
           index = (++index) % texts.length;
         }, 3000);
     }
