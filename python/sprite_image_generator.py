@@ -85,7 +85,7 @@ if __name__ == "__main__":
     # Example Configuration
     input_image = "./images/hsrp-logo.png" # Can be .png or .jpg
     output_json = "./shapes/images/hsrp-logo.sprites.json"
-    sprites_to_generate = 10000
+    sprites_to_generate = 50000
     
     print("Beginning random sprite extraction...")
     

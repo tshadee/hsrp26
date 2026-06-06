@@ -131,13 +131,13 @@
 
     // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
-    const heroPool = new SpritePool(heroMount, { maxSprites: 10000, spriteSize: 2});
+    const heroPool = new SpritePool(heroMount, { maxSprites: 25000, spriteSize: 2});
     const heroPoolText = new SpriteWrite("welcome", 14).attach(heroPool);
     const heroPoolImage = new SpriteImage("hsrp-logo", 300).attach(heroPool);
 
     // ── Logo Pool ──
     const navLogoMount = document.getElementById('pool-hsrp-logo');
-    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 10000, spriteSize: 1});
+    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 1000, spriteSize: 1});
     const navLogoText = new SpriteWrite("hsrp26", 8).attach(navLogoPool);
     const navLogoImage = new SpriteImage("hsrp-logo", 50).attach(navLogoPool); // Set scale to 100px or whatever fits your nav
 

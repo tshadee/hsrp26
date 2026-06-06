@@ -4,6 +4,18 @@ const MAX_SPRITES = 10000;
 const DEFAULT_SPRITE_SPEED = 0.02;  
 const DEFAULT_SPRITE_SPEED_VARIANCE = 0.01;
 
+
+const STRIDE = 18; // 18 floats per sprite
+
+// Offsets mapping to your old SpriteChild properties
+const X = 0, Y = 1, A = 2;
+const TX = 3, TY = 4, TA = 5;      // Target
+const SX = 6, SY = 7, SA = 8;      // Start
+const PROG = 9, SPEED = 10, DRAG = 11;
+const DYING = 12, SHED = 13;       // 0 for false, 1 for true
+const EVX = 14, EVY = 15;          // Expel Velocity
+const CURL_DIR = 16, CURL_CW = 17;
+
 function shuffleArray(array) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -72,136 +84,37 @@ class ShapeCache {
   }
 }
 
-class SpriteChild {
-  constructor() {
-    this.curr = { x: 0, y: 0, a: 0 };
-    this.start = { x: 0, y: 0, a: 0 }; 
-    this.target = { x: 0, y: 0, a: 0 };
-    this.curlDirection = Math.random()*2 - 1;
-    this.curlClockwise = Math.random()*2 - 1;
-    
-    this.isDying = false;
-    this.drag = 0.2 + Math.random() * 1.1; 
-    
-    this.progress = 1; 
-    this.speed = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE; 
-    this.shedThreshold = 2; // Default above 1 so it never sheds normally
-
-    // New variables for expulsion momentum
-    this.expelVx = 0;
-    this.expelVy = 0;
-  }
-
-  set(state) {
-    this.start.x = this.curr.x;
-    this.start.y = this.curr.y;
-    this.start.a = this.curr.a;
-
-    if (state.x !== undefined) this.target.x = state.x;
-    if (state.y !== undefined) this.target.y = state.y;
-    if (state.a !== undefined) this.target.a = state.a; 
-
-    this.progress = 0; 
-    this.speed = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
-  }
-
-  update(timeScale = 1) {
-    const oldX = this.curr.x;
-    const oldY = this.curr.y;
-
-    // Trigger decimation expulsion when crossing the threshold
-    if (!this.isDying && this.progress >= this.shedThreshold) {
-      this.isDying = true;
-      
-      // Calculate current travel vector to use as a base for the burst
-      const vx = this.curr.x - this.start.x;
-      const vy = this.curr.y - this.start.y;
-      
-      // Add a random scatter angle to make it an "explosion" rather than a straight line
-      const angle = Math.atan2(vy, vx) + (Math.random() - 0.5) * 2;
-      const burstForce = 4 + Math.random() * 6; // How violently they are expelled
-      
-      this.expelVx = Math.cos(angle) * burstForce;
-      this.expelVy = Math.sin(angle) * burstForce;
-    }
-
-    if (this.isDying) {
-      // Apply expulsion momentum with friction so they decelerate nicely
-      this.expelVx *= 0.9; 
-      this.expelVy *= 0.9;
-      
-      this.curr.x += this.expelVx * timeScale;
-      this.curr.y += this.expelVy * timeScale;
-      
-      // Frame-independent exponential decay for alpha (fade out quickly)
-      const deathDecay = 1 - Math.pow(1 - 0.05, timeScale);
-      this.curr.a += (0 - this.curr.a) * deathDecay;
-      
-      // Keep the curling effect alive
-      const globalDx = this.curr.x - oldX;
-      const globalDy = this.curr.y - oldY;
-      const swerveStrength = this.curlDirection * 0.45 * this.drag; 
-      const curlX = -this.curlClockwise * globalDy * swerveStrength;
-      const curlY = this.curlClockwise * globalDx * swerveStrength;
-
-      this.curr.x += curlX;
-      this.curr.y += curlY;
-      return;
-    }
-
-    if (this.progress < 1) {
-      this.progress += this.speed * this.drag * timeScale;
-      if (this.progress > 1) this.progress = 1;
-
-      const t = this.progress;
-      const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
-
-      const globalDx = this.target.x - this.start.x;
-      const globalDy = this.target.y - this.start.y;
-
-      const baseX = this.start.x + globalDx * ease;
-      const baseY = this.start.y + globalDy * ease;
-
-      const turbulenceForce = Math.sin(t * Math.PI); 
-      
-      const swerveStrength = this.curlDirection * 0.05 * turbulenceForce * this.drag; 
-      const curlX = -globalDy * swerveStrength;
-      const curlY = globalDx * swerveStrength;
-
-      this.curr.x = baseX + curlX;
-      this.curr.y = baseY + curlY;
-    }
-
-    const vx = (this.curr.x - oldX) / timeScale;
-    const vy = (this.curr.y - oldY) / timeScale;
-    const speed = Math.hypot(vx, vy);
-    const dist = Math.hypot(this.target.x - this.curr.x, this.target.y - this.curr.y);
-
-    const kineticAlpha = (speed/4) * 0.6;
-    const clampedKineticAlpha = Math.max(0.1, Math.min(1.5, kineticAlpha));
-
-    let deadzoneMix = 0;
-    if (dist < 5) {
-      deadzoneMix = 1;
-    } else if (dist < 15) {
-      deadzoneMix = 1 - ((dist - 5) / 10);
-    }
-
-    const desiredAlpha = (1 - deadzoneMix) * clampedKineticAlpha + deadzoneMix * this.target.a;
-    
-    const alphaEase = 1 - Math.pow(1 - 0.2, timeScale);
-    this.curr.a += (desiredAlpha - this.curr.a) * alphaEase;
-  }
-}
-
 // ─── Global Sprite Pool ──────────────────────────────────────
 
 export class SpritePool {
   constructor(canvas, options = {}) {
-    this.canvas = canvas; // This is now the OffscreenCanvas from main.js
-    this.spriteSize = options.spriteSize ?? 3;
-    this.maxSprites = options.maxSprites ?? 1500; 
+    this.maxSprites = options.maxSprites ?? 50000;
     
+    // Allocate memory
+    this.data = new Float32Array(this.maxSprites * STRIDE);
+    this.activeIndices = new Int32Array(this.maxSprites);
+    this.activeKeys = new Float32Array(this.maxSprites * STRIDE);
+    this.deadIndices = new Int32Array(this.maxSprites);
+    
+    // Initialize standard randoms once
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      this.data[idx + X] = 0;
+      this.data[idx + Y] = 0;
+      this.data[idx + A] = 0;
+      this.data[idx + TX] = 0;
+      this.data[idx + TY] = 0;
+      this.data[idx + TA] = 0;
+      this.data[idx + CURL_DIR] = Math.random() * 2 - 1;
+      this.data[idx + CURL_CW] = Math.random() * 2 - 1;
+      this.data[idx + DRAG] = 0.2 + Math.random() * 1.1;
+      this.data[idx + SPEED] = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
+      this.data[idx + SHED] = 2; 
+      this.data[idx + DYING] = 0;
+    }
+
+    this.canvas = canvas; 
+    this.spriteSize = options.spriteSize ?? 3;
     this.ctx = this.canvas.getContext('2d');
     
     this.layoutCenterX = undefined;
@@ -209,14 +122,8 @@ export class SpritePool {
     this.originX = undefined;
     this.originY = undefined;
     
-    // Global pointer tracking for interactivity (updated via messages)
     this.pointerX = -1000;
     this.pointerY = -1000;
-
-    this.sprites = [];
-    for (let i = 0; i < this.maxSprites; i++) {
-      this.sprites.push(new SpriteChild()); 
-    }
 
     this.lastTime = performance.now();
     this.mutateId = 0;
@@ -237,26 +144,42 @@ export class SpritePool {
     if (this.layoutCenterX === undefined) {
       this.layoutCenterX = this.originX;
       this.layoutCenterY = this.originY;
+      
+      // Seed initial positions to origin so they don't fly in from 0,0
+      for(let i=0; i < this.maxSprites; i++) {
+        let idx = i * STRIDE;
+        this.data[idx + X] = this.originX;
+        this.data[idx + Y] = this.originY;
+      }
     }
     
-    // Store localized container dimensions for layout generation
     this.containerWidth = bounds.width;
     this.containerHeight = bounds.height;
   }
 
+  // --- NEW HELPER: Replaces sprite.set() ---
+  setSpriteTarget(idx, tx, ty, ta) {
+    this.data[idx + SX] = this.data[idx + X];
+    this.data[idx + SY] = this.data[idx + Y];
+    this.data[idx + SA] = this.data[idx + A];
+
+    if (tx !== undefined) this.data[idx + TX] = tx;
+    if (ty !== undefined) this.data[idx + TY] = ty;
+    if (ta !== undefined) this.data[idx + TA] = ta; 
+
+    this.data[idx + PROG] = 0; 
+    this.data[idx + SPEED] = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
+  }
+
   moveTo(newX, newY) {
-    // Removed random multiplier to allow for exact translations across the screen.
-    // The visual stagger is already handled natively by SpriteChild.set() assigning random speeds.
+    if (this.layoutCenterX === undefined) return;
     const dx = newX - this.layoutCenterX;
     const dy = newY - this.layoutCenterY;
 
     for (let i = 0; i < this.maxSprites; i++) {
-      const sprite = this.sprites[i];
-      if (!sprite.isDying && sprite.target.a > 0) {
-        sprite.set({ 
-          x: sprite.target.x + dx, 
-          y: sprite.target.y + dy 
-        });
+      let idx = i * STRIDE;
+      if (this.data[idx + DYING] === 0 && this.data[idx + TA] > 0) {
+        this.setSpriteTarget(idx, this.data[idx + TX] + dx, this.data[idx + TY] + dy, this.data[idx + TA]);
       }
     }
 
@@ -264,7 +187,6 @@ export class SpritePool {
     this.layoutCenterY = newY;
   }
 
-  // Returns the pool back to the element's actual position in the DOM
   resetMove() {
     if (this.originX !== undefined && this.originY !== undefined) {
         this.moveTo(this.originX, this.originY);
@@ -277,69 +199,61 @@ export class SpritePool {
 
     // Reset dying states safely
     for (let i = 0; i < this.maxSprites; i++) {
-      const sprite = this.sprites[i];
-      if (sprite.isDying && sprite.curr.a < 0.01) {
-        sprite.target.a = 0;
+      let idx = i * STRIDE;
+      if (this.data[idx + DYING] === 1 && this.data[idx + A] < 0.01) {
+        this.data[idx + TA] = 0;
       }
-      sprite.shedThreshold = 2; 
+      this.data[idx + SHED] = 2; 
     }
 
     const newLayout = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
     
     if (currentMutateId !== this.mutateId) return;
     
-    const offsetX = this.layoutCenterX;
-    const offsetY = this.layoutCenterY;
+    const offsetX = this.layoutCenterX || 0;
+    const offsetY = this.layoutCenterY || 0;
 
-    // 1. Generate absolute targets
     const targets = newLayout.map(pt => ({
       x: pt.x + offsetX,
       y: pt.y + offsetY,
       a: pt.a ?? 1
     }));
 
-    // 2. Build the Spatial Hash Map for O(1) coordinate matching
     const targetMap = new Map();
     for (const pt of targets) {
-      // Round to nearest integer to handle floating-point fuzziness 
       const key = `${Math.round(pt.x)},${Math.round(pt.y)}`;
       if (!targetMap.has(key)) targetMap.set(key, []);
       targetMap.get(key).push(pt);
     }
 
-    const freeActiveSprites = [];
-    const deadSprites = [];
+    const freeActiveIndices = [];
+    const deadIndices = [];
     const dither = 10; 
 
-    // 3. Match existing active sprites to stationary targets
+    // Match existing active sprites to stationary targets
     for (let i = 0; i < this.maxSprites; i++) {
-      const sprite = this.sprites[i];
+      let idx = i * STRIDE;
       
-      // If the sprite is active or mid-flight
-      if (sprite.curr.a > 0.01 || sprite.target.a > 0) {
-        const key = `${Math.round(sprite.target.x)},${Math.round(sprite.target.y)}`;
+      if (this.data[idx + A] > 0.01 || this.data[idx + TA] > 0) {
+        const key = `${Math.round(this.data[idx + TX])},${Math.round(this.data[idx + TY])}`;
         const bin = targetMap.get(key);
 
         if (bin && bin.length > 0) {
-          // EXACT MATCH FOUND: Lock the sprite
-          const matchedTarget = bin.pop(); // Remove from available targets
-          sprite.isDying = false;
-          sprite.shedThreshold = 2;
-          // Setting a sprite to its current destination causes 0 movement 
-          sprite.set({ x: matchedTarget.x, y: matchedTarget.y, a: matchedTarget.a }); 
+          const matchedTarget = bin.pop(); 
+          this.data[idx + DYING] = 0;
+          this.data[idx + SHED] = 2;
+          this.setSpriteTarget(idx, matchedTarget.x, matchedTarget.y, matchedTarget.a);
         } else {
-          // NO MATCH: It's a free agent, put it in the migration pool
-          freeActiveSprites.push({
-            sprite,
-            sortKey: (sprite.curr.x + sprite.curr.y) + (Math.random() * dither - dither / 2)
+          freeActiveIndices.push({
+            idx: idx,
+            sortKey: (this.data[idx + X] + this.data[idx + Y]) + (Math.random() * dither - dither / 2)
           });
         }
       } else {
-        deadSprites.push(sprite);
+        deadIndices.push(idx);
       }
     }
 
-    // 4. Gather the remaining targets that didn't get locked by stationary sprites
     const remainingTargets = [];
     for (const bin of targetMap.values()) {
       for (const pt of bin) {
@@ -350,24 +264,21 @@ export class SpritePool {
       }
     }
     
-    // Sort the leftovers spatially so they fly cleanly to the remaining targets
     remainingTargets.sort((a, b) => a.sortKey - b.sortKey);
-    freeActiveSprites.sort((a, b) => a.sortKey - b.sortKey);
+    freeActiveIndices.sort((a, b) => a.sortKey - b.sortKey);
 
     const neededCount = remainingTargets.length;
-    const freeCount = freeActiveSprites.length;
+    const freeCount = freeActiveIndices.length;
 
-    // Sprite Mapping and prep for decimation on mutate
     for (let i = 0; i < freeCount; i++) {
-      const sprite = freeActiveSprites[i].sprite;
-      sprite.isDying = false;
-      sprite.shedThreshold = 2; 
+      let idx = freeActiveIndices[i].idx;
+      this.data[idx + DYING] = 0;
+      this.data[idx + SHED] = 2; 
 
       if (i < neededCount) {
         const pt = remainingTargets[i];
-        sprite.set({ x: pt.x, y: pt.y, a: pt.a });
+        this.setSpriteTarget(idx, pt.x, pt.y, pt.a);
       } else {
-        // Fallbacks so excess sprites safely shed even if morphing to an empty screen
         let randomTarget;
         if (remainingTargets.length > 0) {
           randomTarget = remainingTargets[Math.floor(Math.random() * remainingTargets.length)];
@@ -377,47 +288,50 @@ export class SpritePool {
           randomTarget = { x: this.layoutCenterX, y: this.layoutCenterY, a: 0 };
         }
         
-        sprite.set({ x: randomTarget.x, y: randomTarget.y, a: 0 }); 
-        sprite.shedThreshold = 0.1 + Math.random() * 0.2; 
+        this.setSpriteTarget(idx, randomTarget.x, randomTarget.y, 0); 
+        this.data[idx + SHED] = 0.1 + Math.random() * 0.2; 
       }
     }
 
-    // Sprite Generation 
     let spawnedCount = 0;
-    while (freeCount + spawnedCount < neededCount && deadSprites.length > 0) {
-      const sprite = deadSprites.pop();
+    while (freeCount + spawnedCount < neededCount && deadIndices.length > 0) {
+      let idx = deadIndices.pop();
       const pt = remainingTargets[freeCount + spawnedCount];
       
-      let guide;
+      let guideIdx = -1;
       if (freeCount > 0) {
-        const guideIndex = Math.floor(Math.random() * Math.min(freeCount, neededCount));
-        guide = freeActiveSprites[guideIndex].sprite;
+        const guideListIndex = Math.floor(Math.random() * Math.min(freeCount, neededCount));
+        guideIdx = freeActiveIndices[guideListIndex].idx;
       } else {
-        const activeGuides = this.sprites.filter(s => s.target.a > 0);
-        if (activeGuides.length > 0) {
-           guide = activeGuides[Math.floor(Math.random() * activeGuides.length)];
+        // Fallback: Find a random active sprite
+        const activeIndices = [];
+        for(let j=0; j<this.maxSprites; j++) {
+            if(this.data[j*STRIDE + TA] > 0) activeIndices.push(j*STRIDE);
+        }
+        if (activeIndices.length > 0) {
+           guideIdx = activeIndices[Math.floor(Math.random() * activeIndices.length)];
         }
       }
 
-      if (guide) {
-        // Probability spawn circle around guide sprites
-        const angle = Math.random() * Math.PI * 2; // Random direction
+      if (guideIdx !== -1) {
+        const angle = Math.random() * Math.PI * 2; 
         const minRadius = 20;
         const maxRadius = 50; 
-        const radius = minRadius + Math.random() * (maxRadius - minRadius); // Random distance
+        const radius = minRadius + Math.random() * (maxRadius - minRadius); 
 
-        sprite.curr.x = guide.curr.x + Math.cos(angle) * radius;
-        sprite.curr.y = guide.curr.y + Math.sin(angle) * radius;
+        this.data[idx + X] = this.data[guideIdx + X] + Math.cos(angle) * radius;
+        this.data[idx + Y] = this.data[guideIdx + Y] + Math.sin(angle) * radius;
       } else {
-        sprite.curr.x = this.layoutCenterX;
-        sprite.curr.y = this.layoutCenterY;
+        this.data[idx + X] = this.layoutCenterX || 0;
+        this.data[idx + Y] = this.layoutCenterY || 0;
       }
 
-      sprite.curr.a = 0; 
-      sprite.isDying = false;
-      sprite.shedThreshold = 2; // so they don't get decimated
-      sprite.drag = 0.2 + Math.random() * 1.5;
-      sprite.set({ x: pt.x, y: pt.y, a: pt.a });
+      this.data[idx + A] = 0; 
+      this.data[idx + DYING] = 0;
+      this.data[idx + SHED] = 2; 
+      this.data[idx + DRAG] = 0.2 + Math.random() * 1.5;
+      
+      this.setSpriteTarget(idx, pt.x, pt.y, pt.a);
       
       spawnedCount++;
     }
@@ -426,26 +340,118 @@ export class SpritePool {
   _renderLoop(timestamp) {
     const dt = timestamp - this.lastTime;
     this.lastTime = timestamp;
-    
-    const cappedDt = Math.min(dt, 100); 
-    const timeScale = cappedDt / 16.666; 
+    const timeScale = Math.min(dt, 100) / 16.666; 
 
     this.ctx.clearRect(0, 0, this.width, this.height);
     this.ctx.fillStyle = 'rgba(255, 255, 255, 1)';
 
+    const data = this.data; 
+
     for (let i = 0; i < this.maxSprites; i++) {
-      const sprite = this.sprites[i];
+      let idx = i * STRIDE;
       
-      sprite.update(timeScale); 
+      // Early exit for dead sprites
+      if (data[idx + A] === 0 && data[idx + TA] <= 0) continue;
 
-      const a = sprite.curr.a;
-      if (a < 0.01) continue; 
+      const oldX = data[idx + X];
+      const oldY = data[idx + Y];
+      let isDying = data[idx + DYING] === 1;
 
-      const px = sprite.curr.x - (this.spriteSize / 2);
-      const py = sprite.curr.y - (this.spriteSize / 2);
+      // 1. Trigger Decimation
+      if (!isDying && data[idx + PROG] >= data[idx + SHED]) {
+        isDying = true;
+        data[idx + DYING] = 1;
+        data[idx + TA] = 0; // Wipe the target alpha so it knows to stay dead
+        
+        const vx = data[idx + X] - data[idx + SX];
+        const vy = data[idx + Y] - data[idx + SY];
+        const angle = Math.atan2(vy, vx) + (Math.random() - 0.5) * 2;
+        const burstForce = 4 + Math.random() * 6;
+        
+        data[idx + EVX] = Math.cos(angle) * burstForce;
+        data[idx + EVY] = Math.sin(angle) * burstForce;
+      }
 
-      this.ctx.globalAlpha = Math.min(1, a);
-      this.ctx.fillRect(px, py, this.spriteSize, this.spriteSize);
+      // 2. State Routing
+      if (isDying) {
+        // --- DYING STATE ---
+        data[idx + EVX] *= 0.9;
+        data[idx + EVY] *= 0.9;
+        data[idx + X] += data[idx + EVX] * timeScale;
+        data[idx + Y] += data[idx + EVY] * timeScale;
+        
+        const decayBase = 1 - 0.05;
+        const deathDecay = 1 - Math.exp(Math.log(decayBase) * timeScale); 
+        data[idx + A] += (0 - data[idx + A]) * deathDecay;
+        
+        const globalDx = data[idx + X] - oldX;
+        const globalDy = data[idx + Y] - oldY;
+        const swerveStrength = data[idx + CURL_DIR] * 0.45 * data[idx + DRAG]; 
+        
+        data[idx + X] += -data[idx + CURL_CW] * globalDy * swerveStrength;
+        data[idx + Y] += data[idx + CURL_CW] * globalDx * swerveStrength;
+
+      } else {
+        // --- ALIVE STATE ---
+        if (data[idx + PROG] < 1) {
+          data[idx + PROG] += data[idx + SPEED] * data[idx + DRAG] * timeScale;
+          if (data[idx + PROG] > 1) data[idx + PROG] = 1;
+
+          const t = data[idx + PROG];
+          let ease;
+          if (t < 0.5) {
+            ease = 4 * t * t * t;
+          } else {
+            const val = -2 * t + 2;
+            ease = 1 - (val * val * val * val) / 2; 
+          }
+
+          const globalDx = data[idx + TX] - data[idx + SX];
+          const globalDy = data[idx + TY] - data[idx + SY];
+
+          const baseX = data[idx + SX] + globalDx * ease;
+          const baseY = data[idx + SY] + globalDy * ease;
+
+          const turbulenceForce = Math.sin(t * Math.PI); 
+          const swerveStrength = data[idx + CURL_DIR] * 0.05 * turbulenceForce * data[idx + DRAG]; 
+          
+          data[idx + X] = baseX + (-globalDy * swerveStrength);
+          data[idx + Y] = baseY + (globalDx * swerveStrength);
+        }
+
+        // Kinetic Alpha / Speed calc (ONLY runs if Alive)
+        const vx = (data[idx + X] - oldX) / timeScale;
+        const vy = (data[idx + Y] - oldY) / timeScale;
+        const speedSq = vx * vx + vy * vy; 
+        const speed = Math.sqrt(speedSq); 
+
+        const targetDistSq = (data[idx + TX] - data[idx + X])**2 + (data[idx + TY] - data[idx + Y])**2;
+        const dist = Math.sqrt(targetDistSq);
+
+        const kineticAlpha = (speed/4) * 0.6;
+        const clampedKineticAlpha = Math.max(0.1, Math.min(1.5, kineticAlpha));
+
+        let deadzoneMix = 0;
+        if (dist < 5) {
+          deadzoneMix = 1;
+        } else if (dist < 15) {
+          deadzoneMix = 1 - ((dist - 5) / 10);
+        }
+
+        const desiredAlpha = (1 - deadzoneMix) * clampedKineticAlpha + deadzoneMix * data[idx + TA];
+        const alphaEaseBase = 1 - 0.2;
+        const alphaEase = 1 - Math.exp(Math.log(alphaEaseBase) * timeScale);
+        
+        data[idx + A] += (desiredAlpha - data[idx + A]) * alphaEase;
+      }
+
+      // 3. Floating-Point Hard Clamp & Drawing
+      if (data[idx + A] < 0.005) {
+        data[idx + A] = 0; // Snap it to absolute zero so the early exit catches it next frame
+      } else if (data[idx + A] >= 0.01) {
+        this.ctx.globalAlpha = Math.min(1, data[idx + A]);
+        this.ctx.fillRect(data[idx + X] - (this.spriteSize / 2), data[idx + Y] - (this.spriteSize / 2), this.spriteSize, this.spriteSize);
+      }
     }
     requestAnimationFrame(this._renderLoop);
   }
