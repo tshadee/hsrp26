@@ -1,7 +1,7 @@
 const DEFAULT_SIZE = 4;
 const MAX_SPRITES = 10000;
 
-const DEFAULT_SPRITE_SPEED = 0.02;  //these need to be framerate independent
+const DEFAULT_SPRITE_SPEED = 0.02;  
 const DEFAULT_SPRITE_SPEED_VARIANCE = 0.01;
 
 function shuffleArray(array) {
@@ -12,7 +12,7 @@ function shuffleArray(array) {
   return array;
 }
 
-const monitorFPS = 60; // Default fallback value
+const monitorFPS = 60; 
 
 class SpriteChild {
   constructor() {
@@ -27,7 +27,11 @@ class SpriteChild {
     
     this.progress = 1; 
     this.speed = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE; 
-    this.shedThreshold = 2;
+    this.shedThreshold = 2; // Default above 1 so it never sheds normally
+
+    // New variables for expulsion momentum
+    this.expelVx = 0;
+    this.expelVy = 0;
   }
 
   set(state) {
@@ -44,18 +48,38 @@ class SpriteChild {
   }
 
   update(timeScale = 1) {
+    const oldX = this.curr.x;
+    const oldY = this.curr.y;
+
+    // Trigger decimation expulsion when crossing the threshold
+    if (!this.isDying && this.progress >= this.shedThreshold) {
+      this.isDying = true;
+      
+      // Calculate current travel vector to use as a base for the burst
+      const vx = this.curr.x - this.start.x;
+      const vy = this.curr.y - this.start.y;
+      
+      // Add a random scatter angle to make it an "explosion" rather than a straight line
+      const angle = Math.atan2(vy, vx) + (Math.random() - 0.5) * 2;
+      const burstForce = 4 + Math.random() * 6; // How violently they are expelled
+      
+      this.expelVx = Math.cos(angle) * burstForce;
+      this.expelVy = Math.sin(angle) * burstForce;
+    }
+
     if (this.isDying) {
-      const oldX = this.curr.x;
-      const oldY = this.curr.y;
+      // Apply expulsion momentum with friction so they decelerate nicely
+      this.expelVx *= 0.9; 
+      this.expelVy *= 0.9;
       
-      // Scale linear movement
-      this.curr.x += 0.01 * timeScale;
-      this.curr.y += 0.01 * timeScale;
+      this.curr.x += this.expelVx * timeScale;
+      this.curr.y += this.expelVy * timeScale;
       
-      // Frame-independent exponential decay for alpha
-      const deathDecay = 1 - Math.pow(1 - 0.01, timeScale);
+      // Frame-independent exponential decay for alpha (fade out quickly)
+      const deathDecay = 1 - Math.pow(1 - 0.05, timeScale);
       this.curr.a += (0 - this.curr.a) * deathDecay;
       
+      // Keep the curling effect alive
       const globalDx = this.curr.x - oldX;
       const globalDy = this.curr.y - oldY;
       const swerveStrength = this.curlDirection * 0.45 * this.drag; 
@@ -67,11 +91,7 @@ class SpriteChild {
       return;
     }
 
-    const oldX = this.curr.x;
-    const oldY = this.curr.y;
-
     if (this.progress < 1) {
-      // Scale bezier progress increment
       this.progress += this.speed * this.drag * timeScale;
       if (this.progress > 1) this.progress = 1;
 
@@ -94,13 +114,12 @@ class SpriteChild {
       this.curr.y = baseY + curlY;
     }
 
-    //for velocity based alpha OTF adjustments
     const vx = (this.curr.x - oldX) / timeScale;
     const vy = (this.curr.y - oldY) / timeScale;
     const speed = Math.hypot(vx, vy);
     const dist = Math.hypot(this.target.x - this.curr.x, this.target.y - this.curr.y);
 
-    const kineticAlpha = 0.2 + (speed / 10) * 1.8;
+    const kineticAlpha = (speed/4) * 0.6;
     const clampedKineticAlpha = Math.max(0.1, Math.min(1.5, kineticAlpha));
 
     let deadzoneMix = 0;
@@ -117,7 +136,7 @@ class SpriteChild {
   }
 }
 
-// Global Sprite Pool
+// ─── Global Sprite Pool ──────────────────────────────────────
 
 export class SpritePool {
   constructor(mountEl, options = {}) {
@@ -126,11 +145,20 @@ export class SpritePool {
     this.maxSprites = options.maxSprites ?? 1500; 
     
     this.canvas = document.createElement('canvas');
+    // canvas will always be fullscren
+    this.canvas.style.position = 'fixed';
+    this.canvas.style.top = '0';
+    this.canvas.style.left = '0';
+    this.canvas.style.pointerEvents = 'none'; // Lets clicks pass through to HTML elements
+    this.canvas.style.zIndex = '10'; 
+    
     this.ctx = this.canvas.getContext('2d');
     this.mountEl.appendChild(this.canvas);
     
     this.layoutCenterX = undefined;
     this.layoutCenterY = undefined;
+    this.originX = undefined;
+    this.originY = undefined;
 
     this._onResize();
     window.addEventListener('resize', () => this._onResize());
@@ -140,10 +168,7 @@ export class SpritePool {
       this.sprites.push(new SpriteChild()); 
     }
 
-    // FPS independence requires deltaT
     this.lastTime = performance.now();
-
-    //to track mid-mutation calls and abandon old if new is present
     this.mutateId = 0;
 
     this._renderLoop = this._renderLoop.bind(this);
@@ -151,28 +176,32 @@ export class SpritePool {
   }
 
   _onResize() {
-    this.width = this.mountEl.offsetWidth;
-    this.height = this.mountEl.offsetHeight;
+    // Canvas dimensions are now explicitly tied to the window
+    this.width = window.innerWidth;
+    this.height = window.innerHeight;
     this.canvas.width = this.width;
     this.canvas.height = this.height;
     
-    // Initialize center if it hasn't been set
+    // Calculate the HTML element's bounding box to determine standard positioning
+    const rect = this.mountEl.getBoundingClientRect();
+    this.originX = rect.left + rect.width / 2;
+    this.originY = rect.top + rect.height / 2;
+
     if (this.layoutCenterX === undefined) {
-      this.layoutCenterX = this.width / 2;
-      this.layoutCenterY = this.height / 2;
+      this.layoutCenterX = this.originX;
+      this.layoutCenterY = this.originY;
     }
   }
 
-
-   //Shifts the entire formation to a new absolute coordinate on the canvas. Bezier movement
   moveTo(newX, newY) {
-    const dx = (newX - this.layoutCenterX)*(Math.random()*0.35+0.2);
-    const dy = (newY - this.layoutCenterY)*(Math.random()*0.35+0.2);
+    // Removed random multiplier to allow for exact translations across the screen.
+    // The visual stagger is already handled natively by SpriteChild.set() assigning random speeds.
+    const dx = newX - this.layoutCenterX;
+    const dy = newY - this.layoutCenterY;
 
     for (let i = 0; i < this.maxSprites; i++) {
       const sprite = this.sprites[i];
       if (!sprite.isDying && sprite.target.a > 0) {
-        // Shift their target destination relative to the new group center
         sprite.set({ 
           x: sprite.target.x + dx, 
           y: sprite.target.y + dy 
@@ -180,115 +209,165 @@ export class SpritePool {
       }
     }
 
-    // Update global controller center
     this.layoutCenterX = newX;
     this.layoutCenterY = newY;
   }
 
+  // Returns the pool back to the element's actual position in the DOM
+  resetMove() {
+    if (this.originX !== undefined && this.originY !== undefined) {
+        this.moveTo(this.originX, this.originY);
+    }
+  }
+
   async mutateTo(layoutController) {
-    
-    //Mutation race condition guard. This is to prevent multiple calls to mutateTo from crashing the web
     this.mutateId++;
     const currentMutateId = this.mutateId;
 
+    // Reset dying states safely
     for (let i = 0; i < this.maxSprites; i++) {
       const sprite = this.sprites[i];
-      // If a sprite was left out in the cold by an aborted transition, 
-      // safely sync its target to its current visual state.
       if (sprite.isDying && sprite.curr.a < 0.01) {
         sprite.target.a = 0;
       }
-      // Force reset threshold so they don't unexpectedly shed mid-flight
       sprite.shedThreshold = 2; 
     }
 
-    const newLayout = await layoutController.getLayout(this.width, this.height, this.spriteSize);
+    const rect = this.mountEl.getBoundingClientRect();
+    const newLayout = await layoutController.getLayout(rect.width, rect.height, this.spriteSize);
     
     if (currentMutateId !== this.mutateId) {
       return; 
     }
-    //after this is normal mutation
     
-    const offsetX = this.layoutCenterX - (this.width / 2);
-    const offsetY = this.layoutCenterY - (this.height / 2);
-    const dither = 10; 
+    const offsetX = this.layoutCenterX;
+    const offsetY = this.layoutCenterY;
 
-    // 1. Sort targets spatially
+    // 1. Generate absolute targets
     const targets = newLayout.map(pt => ({
       x: pt.x + offsetX,
       y: pt.y + offsetY,
-      a: pt.a ?? 1,
-      sortKey: (pt.x + pt.y) + (Math.random() * dither - dither / 2)
-    })).sort((a, b) => a.sortKey - b.sortKey);
+      a: pt.a ?? 1
+    }));
 
-    // 2. Separate active (guides) from dead (reserves)
-    const activeSprites = [];
+    // 2. Build the Spatial Hash Map for O(1) coordinate matching
+    const targetMap = new Map();
+    for (const pt of targets) {
+      // Round to nearest integer to handle floating-point fuzziness 
+      const key = `${Math.round(pt.x)},${Math.round(pt.y)}`;
+      if (!targetMap.has(key)) targetMap.set(key, []);
+      targetMap.get(key).push(pt);
+    }
+
+    const freeActiveSprites = [];
     const deadSprites = [];
-    
+    const dither = 10; 
+
+    // 3. Match existing active sprites to stationary targets
     for (let i = 0; i < this.maxSprites; i++) {
       const sprite = this.sprites[i];
-      // Consider it active if it is visible or currently on a valid journey
+      
+      // If the sprite is active or mid-flight
       if (sprite.curr.a > 0.01 || sprite.target.a > 0) {
-        activeSprites.push({
-          sprite,
-          sortKey: (sprite.curr.x + sprite.curr.y) + (Math.random() * dither - dither / 2)
-        });
+        const key = `${Math.round(sprite.target.x)},${Math.round(sprite.target.y)}`;
+        const bin = targetMap.get(key);
+
+        if (bin && bin.length > 0) {
+          // EXACT MATCH FOUND: Lock the sprite
+          const matchedTarget = bin.pop(); // Remove from available targets
+          sprite.isDying = false;
+          sprite.shedThreshold = 2;
+          // Setting a sprite to its current destination causes 0 movement 
+          sprite.set({ x: matchedTarget.x, y: matchedTarget.y, a: matchedTarget.a }); 
+        } else {
+          // NO MATCH: It's a free agent, put it in the migration pool
+          freeActiveSprites.push({
+            sprite,
+            sortKey: (sprite.curr.x + sprite.curr.y) + (Math.random() * dither - dither / 2)
+          });
+        }
       } else {
         deadSprites.push(sprite);
       }
     }
+
+    // 4. Gather the remaining targets that didn't get locked by stationary sprites
+    const remainingTargets = [];
+    for (const bin of targetMap.values()) {
+      for (const pt of bin) {
+        remainingTargets.push({
+          ...pt,
+          sortKey: (pt.x + pt.y) + (Math.random() * dither - dither / 2)
+        });
+      }
+    }
     
-    // Sort our active guides spatially to map neatly to targets
-    activeSprites.sort((a, b) => a.sortKey - b.sortKey);
+    // Sort the leftovers spatially so they fly cleanly to the remaining targets
+    remainingTargets.sort((a, b) => a.sortKey - b.sortKey);
+    freeActiveSprites.sort((a, b) => a.sortKey - b.sortKey);
 
-    const neededCount = targets.length;
-    const activeCount = activeSprites.length;
+    const neededCount = remainingTargets.length;
+    const freeCount = freeActiveSprites.length;
 
-    // 3. Map Active Guides & Handle Excess Shedding
-    for (let i = 0; i < activeCount; i++) {
-      const sprite = activeSprites[i].sprite;
+    // Sprite Mapping and prep for decimation on mutate
+    for (let i = 0; i < freeCount; i++) {
+      const sprite = freeActiveSprites[i].sprite;
       sprite.isDying = false;
-      sprite.shedThreshold = 2; // Reset shedding threshold
+      sprite.shedThreshold = 2; 
 
       if (i < neededCount) {
-        // Valid guide sprite maps cleanly to its target
-        const pt = targets[i];
+        const pt = remainingTargets[i];
         sprite.set({ x: pt.x, y: pt.y, a: pt.a });
       } else {
-        // Excess sprite: Assign to a random valid target so it travels with the pack
-        const randomTarget = targets[Math.floor(Math.random() * neededCount)];
+        // Fallbacks so excess sprites safely shed even if morphing to an empty screen
+        let randomTarget;
+        if (remainingTargets.length > 0) {
+          randomTarget = remainingTargets[Math.floor(Math.random() * remainingTargets.length)];
+        } else if (targets.length > 0) {
+          randomTarget = targets[Math.floor(Math.random() * targets.length)];
+        } else {
+          randomTarget = { x: this.layoutCenterX, y: this.layoutCenterY, a: 0 };
+        }
         
-        // It seeks the pack, but fades out naturally if it somehow survives the trip
         sprite.set({ x: randomTarget.x, y: randomTarget.y, a: 0 }); 
-        
-        // Program the sprite to trigger its death curl between 20% and 80% of the journey
         sprite.shedThreshold = 0.1 + Math.random() * 0.2; 
       }
     }
 
-    // 4. Handle Growth (drawing upon space around guides)
+    // Sprite Generation 
     let spawnedCount = 0;
-    while (activeCount + spawnedCount < neededCount && deadSprites.length > 0) {
+    while (freeCount + spawnedCount < neededCount && deadSprites.length > 0) {
       const sprite = deadSprites.pop();
-      const pt = targets[activeCount + spawnedCount];
+      const pt = remainingTargets[freeCount + spawnedCount];
       
-      if (activeCount > 0) {
-        // Pick a random guide from the valid active pool
-        const guideIndex = Math.floor(Math.random() * Math.min(activeCount, neededCount));
-        const guide = activeSprites[guideIndex].sprite;
-        
-        // Spawn near the guide with a dither radius
-        sprite.curr.x = guide.curr.x + (Math.random() * 30 - 20);
-        sprite.curr.y = guide.curr.y + (Math.random() * 30 - 20);
+      let guide;
+      if (freeCount > 0) {
+        const guideIndex = Math.floor(Math.random() * Math.min(freeCount, neededCount));
+        guide = freeActiveSprites[guideIndex].sprite;
       } else {
-        // Absolute fallback if mutating from an empty screen
+        const activeGuides = this.sprites.filter(s => s.target.a > 0);
+        if (activeGuides.length > 0) {
+           guide = activeGuides[Math.floor(Math.random() * activeGuides.length)];
+        }
+      }
+
+      if (guide) {
+        // Probability spawn circle around guide sprites
+        const angle = Math.random() * Math.PI * 2; // Random direction
+        const minRadius = 20;
+        const maxRadius = 50; 
+        const radius = minRadius + Math.random() * (maxRadius - minRadius); // Random distance
+
+        sprite.curr.x = guide.curr.x + Math.cos(angle) * radius;
+        sprite.curr.y = guide.curr.y + Math.sin(angle) * radius;
+      } else {
         sprite.curr.x = this.layoutCenterX;
         sprite.curr.y = this.layoutCenterY;
       }
 
-      sprite.curr.a = 0; // Ensure it fades in
+      sprite.curr.a = 0; 
       sprite.isDying = false;
-      sprite.shedThreshold = 2;
+      sprite.shedThreshold = 2; // so they don't get decimated
       sprite.drag = 0.2 + Math.random() * 1.5;
       sprite.set({ x: pt.x, y: pt.y, a: pt.a });
       
@@ -297,13 +376,10 @@ export class SpritePool {
   }
 
   _renderLoop(timestamp) {
-    // Calculate delta time
     const dt = timestamp - this.lastTime;
     this.lastTime = timestamp;
     
-    // Cap dt to prevent explosions if the user switches browser tabs
     const cappedDt = Math.min(dt, 100); 
-    // 16.666ms is 1 frame at 60fps. This yields a multiplier near 1.0 on standard monitors.
     const timeScale = cappedDt / 16.666; 
 
     this.ctx.clearRect(0, 0, this.width, this.height);
@@ -312,7 +388,6 @@ export class SpritePool {
     for (let i = 0; i < this.maxSprites; i++) {
       const sprite = this.sprites[i];
       
-      // Pass the scale into the update loop
       sprite.update(timeScale); 
 
       const a = sprite.curr.a;
@@ -339,27 +414,22 @@ export class SpritePool {
 
 export class LayoutController {
   constructor() {
-    this.pool = null; // The renderer this controller is currently driving
+    this.pool = null; 
   }
 
-  // Binds the controller to a specific pool
   attach(pool) {
     this.pool = pool;
-    return this; // Enable chaining
+    return this; 
   }
 
-  // To be overridden by child classes
-  async getLayout(canvasWidth, canvasHeight, spriteSize) {
+  async getLayout(containerWidth, containerHeight, spriteSize) {
     console.warn("getLayout must be implemented by the subclass");
     return [];
   }
 }
 
-
-
 export class LetterParent {
   constructor(letterFilename, shapesBase = './shapes/letters/') {
-    // The filename is now pre-sanitized by SpriteWrite
     this.letterFilename = letterFilename; 
     this.shapesBase = shapesBase;
   }
@@ -372,22 +442,22 @@ export class LetterParent {
       return data.sprites;
     } catch (e) {
       console.warn(`Failed to load shape: ${this.letterFilename}. Ignoring.`);
-      return []; // Return empty array so it fails gracefully
+      return []; 
     }
   }
 }
 
 export class SpriteWrite extends LayoutController {
   constructor(text, shapesBase = './shapes/letters/NVMono/', fontSize = 16, densityFactor = 0.4, justify = 'center') {
-    super(); // Initialize the LayoutController base
+    super(); 
     this.text = text; 
     this.shapesBase = shapesBase;
     this.fontSize = fontSize; 
     this.densityFactor = densityFactor;
     this.justify = justify;
     this.pixelMultiplier = 3.5; 
-    this.hs = -20; 
-    this.vs = -5; 
+    this.hs = (-20)*this.fontSize/14; 
+    this.vs = (-5)*this.fontSize/14; 
   }
 
   setFontSize(size) {
@@ -411,7 +481,6 @@ export class SpriteWrite extends LayoutController {
   }
 
   async morphTo(newText, forceFlicker = false) {
-    // Guard against redundant morphs to stop the uncontrolled scrambling
     if (this.text === newText && !forceFlicker) {
       return this; 
     }
@@ -427,54 +496,26 @@ export class SpriteWrite extends LayoutController {
     return this; 
   }
 
-
   _sanitizeChar(char) {
     const specialCharOutputs = {
-        '?': 'question',
-        '/': 'slash',
-        '.': 'period',
-        '!': 'exclamation',
-        '@': 'at',
-        '#': 'hash',
-        '$': 'dollar',
-        '%': 'percent',
-        '^': 'caret',
-        '&': 'ampersand',
-        '*': 'asterisk',
-        '(': 'left_paren',
-        ')': 'right_paren',
-        ' ': 'space',
-        ',': 'comma', 
-        "'": 'apostrophe', 
-        '"': 'quotation',
-        ';': 'semicolon', 
-        ':': 'colon',
-        '<': 'less_than',
-        '>': 'greater_than',
-        '+': 'plus',
-        '=': 'equals',
-        '-': 'dash',
-        '{': 'left_brace',
-        '}': 'right_brace',
-        '[': 'left_bracket',
-        ']': 'right_bracket',
-        '|': 'pipe',
-        '~': 'tilde',
-        '`': 'backtick'
+        '?': 'question', '/': 'slash', '.': 'period', '!': 'exclamation',
+        '@': 'at', '#': 'hash', '$': 'dollar', '%': 'percent', '^': 'caret',
+        '&': 'ampersand', '*': 'asterisk', '(': 'left_paren', ')': 'right_paren',
+        ' ': 'space', ',': 'comma', "'": 'apostrophe', '"': 'quotation',
+        ';': 'semicolon', ':': 'colon', '<': 'less_than', '>': 'greater_than',
+        '+': 'plus', '=': 'equals', '-': 'dash', '{': 'left_brace', '}': 'right_brace',
+        '[': 'left_bracket', ']': 'right_bracket', '|': 'pipe', '~': 'tilde', '`': 'backtick'
     };
 
     if (specialCharOutputs[char]) return specialCharOutputs[char];
     if (/[A-Z]/.test(char)) return `${char}_upper`;
     if (/[a-z]/.test(char)) return `${char}_lower`;
 
-    // Fallback (Numbers 0-9)
     return char;
   }
 
-  async getLayout(canvasWidth, canvasHeight, spriteSize) {
+  async getLayout(containerWidth, containerHeight, spriteSize) {
     const finalLayout = [];
-    
-    // Split the input into an array of lines based on the newline character
     const lines = this.text.split('\n');
     
     const letterScale = this.fontSize * this.pixelMultiplier;
@@ -482,39 +523,31 @@ export class SpriteWrite extends LayoutController {
     const spriteArea = spriteSize * spriteSize;
     const targetSpriteCount = Math.floor((letterArea / spriteArea) * this.densityFactor);
 
-    // 1. Pre-calculate line dimensions to support block justification
     const lineGeometries = lines.map(line => {
-      // Line width = (Number of chars * Scale) + (Number of spaces between chars * hs)
       const width = line.length > 0 
         ? (line.length * letterScale) + ((line.length - 1) * this.hs) 
         : 0;
       return { text: line, width: width };
     });
 
-    // Find the widest line to act as the bounding box for left/right justification
     const maxLineWidth = Math.max(...lineGeometries.map(lg => lg.width));
-    
-    // Total block height = (Number of lines * Scale) + (Number of spaces between lines * vs)
     const totalHeight = (lines.length * letterScale) + ((lines.length - 1) * this.vs);
 
-    // Center the entire text block vertically in the canvas
-    let currentY = (canvasHeight / 2) - (totalHeight / 2);
+    // Center point logic for the block on the Y axis
+    let currentY = -(totalHeight / 2);
 
-    // 2. Build the layout line by line
     for (const lineGeo of lineGeometries) {
       let currentX = 0;
       
-      // Determine the starting X coordinate based on justification
+      // Plot X relative to bounding box limits
       if (this.justify === 'left') {
-        currentX = (canvasWidth / 2) - (maxLineWidth / 2);
+        currentX = -(containerWidth / 2);
       } else if (this.justify === 'right') {
-        currentX = (canvasWidth / 2) + (maxLineWidth / 2) - lineGeo.width;
+        currentX = (containerWidth / 2) - lineGeo.width;
       } else { 
-        // 'center' (default)
-        currentX = (canvasWidth / 2) - (lineGeo.width / 2);
+        currentX = -(lineGeo.width / 2);
       }
 
-      // 3. Process each character in the current line
       for (let i = 0; i < lineGeo.text.length; i++) {
         const char = lineGeo.text[i];
 
@@ -524,12 +557,10 @@ export class SpriteWrite extends LayoutController {
           let spriteData = await letterBlueprint.getLayout();
 
           if (spriteData.length > targetSpriteCount) {
-            // Shuffle array is assumed to be available globally from your engine.js
             shuffleArray(spriteData); 
             spriteData = spriteData.slice(0, targetSpriteCount);
           }
 
-          // Map normalized JSON coordinates to global canvas coordinates
           for (const pt of spriteData) {
             finalLayout.push({
               x: currentX + (pt.x * letterScale),
@@ -539,11 +570,8 @@ export class SpriteWrite extends LayoutController {
           }
         }
         
-        // Advance the X cursor for the next character (plus horizontal spacing)
         currentX += letterScale + this.hs;
       }
-      
-      // Advance the Y cursor for the next line (plus vertical spacing)
       currentY += letterScale + this.vs;
     }
     

@@ -2,15 +2,56 @@
 body {
   background-color: #020418; /* Deep, moody blue */
   margin: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
   overflow: hidden; /* Prevents scrollbars */
 }
 
-.letter-mount {
+.hero-mount {
   width: 100vw;
-  height: 100vh;
-  /* The canvas will automatically fill this space */
+  height: 86vh;
+  align-self: center;
+}
+
+.nav-container {
+  display: grid;
+  grid-template-columns: 1fr 3fr 1fr;
+  position: sticky;
+  top: 0;
+  width: 100vw;
+  height: 5vh;
+  align-items: center;
+  padding: 1vh 0px 1vh 0px;
+}
+
+.nav-item {
+  width: 10vw;
+}
+
+.nav-left {
+  display: flex;
+  justify-content: left;
+  align-items: center;
+}
+
+.nav-middle {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.nav-right {
+  display: flex;
+  justify-content: right;
+  align-items: center;
+  padding-right: 10px;
+}
+
+.footer-container {
+  display: flex;
+  position: sticky;
+  bottom: 0;
+  width: 100vw;
+  height: 5vh;
+  justify-content: center;
+  align-items: center;
+  padding: 1vh 0px 1vh 0px;
 }

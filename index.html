@@ -3,35 +3,142 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>test</title>
+  <title>hsrp26</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
+  <nav class="nav-bar">
+    <div class="nav-container">
+
+        <div class="nav-left">
+          <div class="nav-item" id="pool-hsrp-logo"></div>
+        </div>
+
+        <div class="nav-middle">
+          <div class="nav-item" id="pool-nav-1"></div>
+          <div class="nav-item" id="pool-nav-2"></div>
+          <div class="nav-item" id="pool-nav-3"></div>
+        </div>
+
+        <div class="nav-right">
+          <div class="nav-item" id="pool-nav-time"></div>
+        </div>
+
+    </div>
+  </nav>
 
   <!-- ── Page ──────────────────────────────────────────────────────────────── -->
-  <main class="page">
+  <main class="hero">
 
-    <header class="site-header">
-      <div id="letter-mount" class="letter-mount" aria-label="Letter display"></div>
+    <header>
+      <div id="hero-mount" class="hero-mount" aria-label="hero display"></div>
     </header>
 
   </main>
+
+  <footer>
+    <div class="footer-container">
+    
+    </div>
+  </footer>
 
   <!-- ──  engine  ────────────────────────────────────────── -->
   <script type="module">
     import { SpritePool, SpriteWrite } from './js files/engine.js';
 
-    const mount = document.getElementById('letter-mount');
-    const mainPool = new SpritePool(mount, { maxSprites: 2000, spriteSize: 2 });
-    const textController = new SpriteWrite("Hello World!", './shapes/letters/NVMono/', 14).attach(mainPool);
+    const heroMount = document.getElementById('hero-mount');
+    const heroPool = new SpritePool(heroMount, { maxSprites: 5000, spriteSize: 2});
+    const heroPoolText = new SpriteWrite("welcome", './shapes/letters/NVMono/', 14).attach(heroPool);
 
-    await mainPool.mutateTo(textController);
+
+    const navLogoMount = document.getElementById('pool-hsrp-logo');
+    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 600, spriteSize: 1});
+    const navLogoText = new SpriteWrite("hsrp26", './shapes/letters/NVMono/', 8).attach(navLogoPool);
+
+    const navMount1 = document.getElementById('pool-nav-1');
+    const navPool1 = new SpritePool(navMount1, { maxSprites: 500, spriteSize: 1 });
+    const navPool1Text = new SpriteWrite("np1", './shapes/letters/NVMono/', 8).attach(navPool1);
+
+    const navMount2 = document.getElementById('pool-nav-2');
+    const navPool2 = new SpritePool(navMount2, { maxSprites: 500, spriteSize: 1 });
+    const navPool2Text = new SpriteWrite("np2", './shapes/letters/NVMono/', 8).attach(navPool2);
+
+    const navMount3 = document.getElementById('pool-nav-3');
+    const navPool3 = new SpritePool(navMount3, { maxSprites: 500, spriteSize: 1 });
+    const navPool3Text = new SpriteWrite("np3", './shapes/letters/NVMono/', 8).attach(navPool3);
+
+    const navMountTime = document.getElementById('pool-nav-time');
+    const navPoolTime = new SpritePool(navMountTime, { maxSprites: 1000, spriteSize: 1});
+    const navPoolTimeText = new SpriteWrite("00:00:00 am", './shapes/letters/NVMono/', 8).attach(navPoolTime);
+
+
+
+
+
+    await heroPool.mutateTo(heroPoolText);
+    await navLogoPool.mutateTo(navLogoText);
+    await navPool1.mutateTo(navPool1Text);
+    await navPool2.mutateTo(navPool2Text);
+    await navPool3.mutateTo(navPool3Text);
+    await navPoolTime.mutateTo(navPoolTimeText);
+
+    let lastSecondUpdated = -1;
+
+    function updateClock() {
+      const now = new Date();
+      const s = now.getSeconds();
+
+      // Trigger strictly when seconds are divisible by 5, and only once per that second
+      if (s % 5 === 0 && s !== lastSecondUpdated) {
+        lastSecondUpdated = s;
+
+        let h = now.getHours();
+        const ampm = h >= 12 ? 'pm' : 'am';
+        
+        // Convert to 12-hour format
+        h = h % 12;
+        h = h ? h : 12; // If hour is 0, make it 12
+
+        // Pad minutes and seconds with leading zeros if needed
+        const m = String(now.getMinutes()).padStart(2, '0');
+        const sec = String(s).padStart(2, '0');
+
+        const timeString = `${h}:${m}:${sec} ${ampm}`;
+        navPoolTimeText.morphTo(timeString);
+      }
+    }
+
+    // Poll every 200ms to avoid JavaScript interval drift missing the precise modulo 5 alignment
+    setInterval(updateClock, 200);
+
+    function updateLogo() {
+      const logoTexts = [
+        'hsrp.cc',
+        'hsrp26'
+      ]
+
+      let index = 0;
+
+      function recusionLogo()
+      {
+        let timeoutTime = 5000 + Math.random()*5000;
+        setTimeout(() => {
+          navLogoText.morphTo(logoTexts[index]);
+          index = (++index) % logoTexts.length;
+          recusionLogo();
+        }, timeoutTime)
+      }
+      
+      recusionLogo();
+    }
+
+    updateLogo();
 
     function cycleText() {
         const texts = [
           'hsrp26',
-          'hsrp26.cc',
+          'hsrp.cc',
           '0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`',
           'the quick brown fox\njumps over the lazy dog',
           'THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG',
@@ -51,7 +158,7 @@
         let index = 0;
   
         setInterval(() => {
-          textController.morphTo(texts[index]);
+          heroPoolText.morphTo(texts[index]);
           index = (++index) % texts.length;
         }, 3000);
     }
@@ -60,7 +167,7 @@
 
 
   </script>
-  <script src="./js files/marine-snow-physics.js"></script>
+  <!-- <script src="./js files/marine-snow-physics.js"></script> -->
 
 </body>
 </html>
