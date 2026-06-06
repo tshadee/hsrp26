@@ -476,42 +476,49 @@ export class LayoutController {
   }
 }
 
-export class LetterParent {
-  constructor(letterFilename, shapesBase = './shapes/letters/') {
-    this.letterFilename = letterFilename; 
+export class ShapeParent {
+  constructor(filename, type) {
+    this.filename = filename; 
     
-    // Fix the path for the worker context
-    this.workerPath = shapesBase.replace(/^\.\//, '../');
+    // Internal routing based on the blueprint type
+    const rootPath = '../shapes/';
+    const directories = {
+        'letter': 'letters/NVMono/',
+        'image': 'images/',
+        'shape': 'geometric/', // Future proofing
+        '3Dshape': 'models/'   // Future proofing
+    };
+
+    const targetDir = directories[type] || '';
+    this.workerPath = `${rootPath}${targetDir}`;
   }
 
   async getLayout() {
-    const url = `${this.workerPath}${this.letterFilename}.sprites.json`;
+    const url = `${this.workerPath}${this.filename}.sprites.json`;
     
-    // 1. Instant RAM lookup (Happens 99% of the time)
-    if (ramCache.has(url)) {
-      return ramCache.get(url);
-    }
+    // 1. Instant RAM lookup
+    if (ramCache.has(url)) return ramCache.get(url);
 
-    // 2. Fallback just in case a morph requests a file before the preloader finishes
+    // 2. Fetch from network/disk cache
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error('File not found');
       const data = await res.json();
-      ramCache.set(url, data.sprites); // Add it to RAM for next time
+      ramCache.set(url, data.sprites); 
       return data.sprites;
     } catch (e) {
-      console.warn(`Failed to load shape: ${this.letterFilename}. Ignoring.`);
+      console.warn(`Failed to load shape: ${this.filename} at ${url}. Ignoring.`);
       return []; 
     }
   }
 }
 
 export class SpriteWrite extends LayoutController {
-  // Now accepts the raw config object sent over the Worker boundary
   constructor(config) {
     super(); 
     this.text = config.text; 
-    this.shapesBase = config.shapesBase;
+    this.category = config.category;
+    this.shapesRoot = config.shapesRoot;
     this.fontSize = config.fontSize; 
     this.densityFactor = config.densityFactor;
     this.justify = config.justify;
@@ -574,7 +581,7 @@ export class SpriteWrite extends LayoutController {
     return char;
   }
 
-  async getLayout(containerWidth, containerHeight, spriteSize) {
+async getLayout(containerWidth, containerHeight, spriteSize) {
     const finalLayout = [];
     const lines = this.text.split('\n');
     
@@ -613,7 +620,7 @@ export class SpriteWrite extends LayoutController {
 
         if (char !== ' ') {
           const safeFilename = this._sanitizeChar(char);
-          const letterBlueprint = new LetterParent(safeFilename, this.shapesBase);
+          const letterBlueprint = new ShapeParent(safeFilename, 'letter');
           let spriteData = await letterBlueprint.getLayout();
 
           if (spriteData.length > targetSpriteCount) {
@@ -639,6 +646,50 @@ export class SpriteWrite extends LayoutController {
   }
 }
 
+export class SpriteImage extends LayoutController {
+  constructor(config) {
+    super(); 
+    this.filename = config.filename; 
+    this.category = config.category;
+    this.shapesRoot = config.shapesRoot;
+    this.scale = config.scale; 
+    this.densityFactor = config.densityFactor;
+  }
+
+  async getLayout(containerWidth, containerHeight, spriteSize) {
+    const finalLayout = [];
+    
+    // Fetch the raw normalized data from the image map
+    const imageBlueprint = new ShapeParent(this.filename, 'image');
+    let spriteData = await imageBlueprint.getLayout();
+
+    if (!spriteData || spriteData.length === 0) return [];
+
+    // Optional Density Filtering (similar to text)
+    const imageArea = this.scale * this.scale;
+    const spriteArea = spriteSize * spriteSize;
+    const targetSpriteCount = Math.floor((imageArea / spriteArea) * this.densityFactor);
+
+    if (spriteData.length > targetSpriteCount) {
+      shuffleArray(spriteData); 
+      spriteData = spriteData.slice(0, targetSpriteCount);
+    }
+
+    // Process coordinates
+    for (const pt of spriteData) {
+      finalLayout.push({
+        // Since image coordinates are normalized 0.0 to 1.0, 
+        // subtracting 0.5 centers the image perfectly around (0,0)
+        x: (pt.x - 0.5) * this.scale,
+        y: (pt.y - 0.5) * this.scale,
+        a: pt.a
+      });
+    }
+    
+    return finalLayout;
+  }
+}
+
 
 let pool = null;
 
@@ -648,9 +699,7 @@ self.onmessage = async (e) => {
   switch (data.type) {
     case 'INIT':
       pool = new SpritePool(data.canvas, data.options);
-      
-      // Start caching immediately in the background using your default path
-      // (This will run silently and not block the render loop)
+      // Preload default font (you can adjust this path to match your actual default font folder)
       ShapeCache.preload('./shapes/letters/NVMono/');
       break;
     case 'UPDATE_BOUNDS':
@@ -670,9 +719,12 @@ self.onmessage = async (e) => {
       break;
     case 'MORPH':
       if (pool) {
-        // Route the config to the correct local layout generator
+        // Route the config to the correct local layout generator based on type
         if (data.layoutType === 'SpriteWrite') {
           const generator = new SpriteWrite(data.config);
+          await pool.mutateTo(generator);
+        } else if (data.layoutType === 'SpriteImage') {
+          const generator = new SpriteImage(data.config);
           await pool.mutateTo(generator);
         }
       }

@@ -44,36 +44,42 @@
   </footer>
 
   <!-- ──  engine  ────────────────────────────────────────── -->
-  <script type="module">
-    import { SpritePool, SpriteWrite } from './js files/main.js';
+<script type="module">
+    import { SpritePool, SpriteWrite, SpriteImage } from './js files/main.js';
 
+    // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
-    const heroPool = new SpritePool(heroMount, { maxSprites: 5000, spriteSize: 2});
-    const heroPoolText = new SpriteWrite("welcome", './shapes/letters/NVMono/', 14).attach(heroPool);
+    const heroPool = new SpritePool(heroMount, { maxSprites: 10000, spriteSize: 2});
+    const heroPoolText = new SpriteWrite("welcome", 14).attach(heroPool);
+    const heroPoolImage = new SpriteImage("hsrp-logo", 300).attach(heroPool);
 
-
+    // ── Logo Pool ──
     const navLogoMount = document.getElementById('pool-hsrp-logo');
-    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 600, spriteSize: 1});
-    const navLogoText = new SpriteWrite("hsrp26", './shapes/letters/NVMono/', 8).attach(navLogoPool);
+    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 10000, spriteSize: 1});
+    const navLogoText = new SpriteWrite("hsrp26", 8).attach(navLogoPool);
+    const navLogoImage = new SpriteImage("hsrp-logo", 50).attach(navLogoPool); // Set scale to 100px or whatever fits your nav
 
+    // ── Navigation Pools ──
     const navMount1 = document.getElementById('pool-nav-1');
     const navPool1 = new SpritePool(navMount1, { maxSprites: 500, spriteSize: 1 });
-    const navPool1Text = new SpriteWrite("np1", './shapes/letters/NVMono/', 8).attach(navPool1);
+    const navPool1Text = new SpriteWrite("navp1", 8).attach(navPool1);
 
     const navMount2 = document.getElementById('pool-nav-2');
     const navPool2 = new SpritePool(navMount2, { maxSprites: 500, spriteSize: 1 });
-    const navPool2Text = new SpriteWrite("np2", './shapes/letters/NVMono/', 8).attach(navPool2);
+    const navPool2Text = new SpriteWrite("navp2", 8).attach(navPool2);
 
     const navMount3 = document.getElementById('pool-nav-3');
     const navPool3 = new SpritePool(navMount3, { maxSprites: 500, spriteSize: 1 });
-    const navPool3Text = new SpriteWrite("np3", './shapes/letters/NVMono/', 8).attach(navPool3);
+    const navPool3Text = new SpriteWrite("navp3", 8).attach(navPool3);
 
+    // ── Clock Pool ──
     const navMountTime = document.getElementById('pool-nav-time');
     const navPoolTime = new SpritePool(navMountTime, { maxSprites: 1000, spriteSize: 1});
-    const navPoolTimeText = new SpriteWrite("00:00:00 am", './shapes/letters/NVMono/', 8).attach(navPoolTime);
+    const navPoolTimeText = new SpriteWrite("00:00:00 am", 8).attach(navPoolTime);
 
-    await heroPool.mutateTo(heroPoolText);
-    await navLogoPool.mutateTo(navLogoText);
+    // Initial Mutations
+    await heroPool.mutateTo(heroPoolImage);
+    await navLogoPool.mutateTo(navLogoImage);
     await navPool1.mutateTo(navPool1Text);
     await navPool2.mutateTo(navPool2Text);
     await navPool3.mutateTo(navPool3Text);
@@ -85,50 +91,39 @@
       const now = new Date();
       const s = now.getSeconds();
 
-      // Trigger strictly when seconds are divisible by 5, and only once per that second
       if (s % 5 === 0 && s !== lastSecondUpdated) {
         lastSecondUpdated = s;
-
         let h = now.getHours();
         const ampm = h >= 12 ? 'pm' : 'am';
-        
-        // Convert to 12-hour format
-        h = h % 12;
-        h = h ? h : 12; // If hour is 0, make it 12
-
-        // Pad minutes and seconds with leading zeros if needed
+        h = h % 12 || 12;
         const m = String(now.getMinutes()).padStart(2, '0');
         const sec = String(s).padStart(2, '0');
-
         const timeString = `${h}:${m}:${sec} ${ampm}`;
+        
         navPoolTimeText.morphTo(timeString);
       }
     }
-
-    // Poll every 200ms to avoid JavaScript interval drift missing the precise modulo 5 alignment
     setInterval(updateClock, 200);
 
     function updateLogo() {
-      const logoTexts = [
-        'hsrp.cc',
-        'hsrp26'
-      ]
-
+      const logoTexts = ['hsrp.cc', 'hsrp26', 'x'];
       let index = 0;
 
-      function recusionLogo()
-      {
-        let timeoutTime = 5000 + Math.random()*5000;
+      function recursionLogo() {
+        let timeoutTime = 5000 + Math.random() * 5000;
         setTimeout(() => {
-          navLogoText.morphTo(logoTexts[index]);
-          index = (++index) % logoTexts.length;
-          recusionLogo();
+          if (index !== 2) {
+            navLogoText.morphTo(logoTexts[index]);
+          } else {
+            // Master mutation to an Image Map
+            navLogoPool.mutateTo(navLogoImage);
+          }
+          index = (index + 1) % logoTexts.length;
+          recursionLogo();
         }, timeoutTime)
       }
-      
-      recusionLogo();
+      recursionLogo();
     }
-
     updateLogo();
 
     function cycleText() {

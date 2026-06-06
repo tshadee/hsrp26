@@ -104,15 +104,13 @@ export class SpritePool {
 
 // ─── Configuration Builders ──────────────────────────────────────
 
-// This class now just builds configuration states to send across the thread boundary.
 export class SpriteWrite {
-  constructor(text, shapesBase = './shapes/letters/NVMono/', fontSize = 16, densityFactor = 0.4, justify = 'center') {
-    this.type = 'SpriteWrite'; // Tells the worker which layout logic to run
+  constructor(text, fontSize = 16, densityFactor = 0.4, justify = 'center') {
+    this.type = 'SpriteWrite'; 
     this.pool = null;
     
     this.config = {
       text: text,
-      shapesBase: shapesBase,
       fontSize: fontSize,
       densityFactor: densityFactor,
       justify: justify,
@@ -160,6 +158,52 @@ export class SpriteWrite {
       await this.pool.mutateTo(this);
     } else {
       console.warn("SpriteWrite morphed, but it isn't attached to a SpritePool.");
+    }
+    
+    return this;
+  }
+}
+
+export class SpriteImage {
+  constructor(filename, scale = 300, densityFactor = 1.0) {
+    this.type = 'SpriteImage'; 
+    this.pool = null;
+    
+    this.config = {
+      filename: filename,
+      scale: scale, 
+      densityFactor: densityFactor
+    };
+  }
+
+  attach(pool) {
+    this.pool = pool;
+    return this;
+  }
+
+  setScale(scale) {
+    this.config.scale = scale;
+    return this;
+  }
+
+  setDensity(density) {
+    this.config.densityFactor = density;
+    return this;
+  }
+
+  getConfig() {
+    return this.config;
+  }
+
+  async morphTo(newFilename, forceFlicker = false) {
+    if (this.config.filename === newFilename && !forceFlicker) return this;
+    
+    this.config.filename = newFilename;
+    
+    if (this.pool) {
+      await this.pool.mutateTo(this);
+    } else {
+      console.warn("SpriteImage morphed, but it isn't attached to a SpritePool.");
     }
     
     return this;
