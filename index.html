@@ -42,11 +42,12 @@
 
   <!-- ── Page ──────────────────────────────────────────────────────────────── -->
   <main class="hero">
-
         <div id="hero-left-arrow" class="hero-arrow"></div>
         <div id="hero-mount" class="hero-mount" aria-label="hero display"></div>
+        
+        <div id="page-container" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;"></div>
+        
         <div id="hero-right-arrow" class="hero-arrow"></div>
-
   </main>
 
   <!-- ──  engine  ────────────────────────────────────────── -->
@@ -119,19 +120,21 @@
 
   // ─── MAIN ENGINE (Only runs when called) ────────────────────────
   
-  import { SpritePool, SpriteWrite, SpriteImage , SpriteGroup } from './js files/main.js';
+  import { SpritePool , SpriteWrite , SpriteImage , SpriteGroup } from './js files/main.js';
+  import { Router } from './js files/router.js';
+  import { HomePage } from './js files/pages/HomePage.js';
+  import { AboutPage } from './js files/pages/AboutPage.js';
 
   async function startWebsite() {
 
     // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
-    const heroPool = new SpritePool(heroMount, { maxSprites: 25000, spriteSize: 2});
-    const heroPoolText = new SpriteWrite("welcome", 14).attach(heroPool);
+    const heroPool = new SpritePool(heroMount, { maxSprites: 25000, spriteSize: 2, interactionType: 'hero'});
     const heroPoolImage = new SpriteImage("hsrp-logo", 300).attach(heroPool);
 
     // ── Logo Pool ──
     const navLogoMount = document.getElementById('pool-hsrp-logo');
-    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 5000, spriteSize: 1});
+    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 2500, spriteSize: 1});
     const navLogoText = new SpriteWrite("hsrp26", 8).attach(navLogoPool);
     const navLogoImage = new SpriteImage("hsrp-logo-reduced-inverted", 50).attach(navLogoPool); // Set scale to 100px or whatever fits your nav
 
@@ -153,9 +156,8 @@
     uiGroup.add(arrowLeft, document.getElementById('hero-left-arrow'));
     uiGroup.add(arrowRight, document.getElementById('hero-right-arrow'));
 
-    // ── Localized Clock Pool ──
+    // ── Clock Pool ──
     const navMountTime = document.getElementById('pool-nav-time');
-    // NOTE: fullScreen is false! It will size itself to the DOM element container.
     const navPoolTime = new SpritePool(navMountTime, { maxSprites: 1000, spriteSize: 1, fullScreen: true });
     const navPoolTimeText = new SpriteWrite("00:00:00 am", 8).attach(navPoolTime);
 
@@ -213,32 +215,38 @@
     }
     updateLogo();
 
-    function cycleText() {
-        const texts = [
-          'hsrp26',
-          'hsrp.cc',
-          '0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`',
-          'the quick brown fox\njumps over the lazy dog',
-          'THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG',
-          'x'
-        ];
-  
-        let index = 0;
-  
-        setInterval(() => {
-          if (index == 5){
-            heroPool.mutateTo(heroPoolImage);
-          }
-          else {
-            heroPoolText.morphTo(texts[index]);
-          }
-          index = (++index) % texts.length;
-        }, 3000);
-    }
+    // ── Routing & UI Wiring ──
+    const contentContainer = document.getElementById('page-container');
+    const router = new Router(heroPool, uiPool);
 
-    setTimeout(() => {
-      cycleText();
-    },2000)
+    // Register your page sequence
+    router.register(new HomePage(contentContainer, heroPool))
+          .register(new AboutPage(contentContainer, heroPool));
+
+    // Wire up the arrows to trigger the explosion and change pages
+    document.getElementById('hero-right-arrow').addEventListener('click', (e) => {
+      uiPool.explodeAt(e.clientX, e.clientY);
+      router.next();
+    });
+
+    document.getElementById('hero-left-arrow').addEventListener('click', (e) => {
+      uiPool.explodeAt(e.clientX, e.clientY);
+      router.prev();
+    });
+
+    // Wire up the top nav buttons to jump to specific pages
+    document.getElementById('pool-nav-1').addEventListener('click', (e) => {
+      uiPool.explodeAt(e.clientX, e.clientY);
+      router.navigateTo(0); // Jumps to HomePage
+    });
+
+    document.getElementById('pool-nav-3').addEventListener('click', (e) => {
+      uiPool.explodeAt(e.clientX, e.clientY);
+      router.navigateTo(1); // Jumps to AboutPage
+    });
+
+    // Mount the initial page
+    router.navigateTo(0);
   }
   </script>
 

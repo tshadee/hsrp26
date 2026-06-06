@@ -73,7 +73,11 @@ body {
 }
 
 .nav-item {
-  width: 10vw;
+  width: 200px;  
+  height: 5vh;  
+  cursor: pointer;
+  z-index: 20;  
+  /* border: 1px solid red; */
 }
 
 .nav-left {

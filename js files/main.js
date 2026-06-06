@@ -1,4 +1,8 @@
 // main.js - Main Thread Sensor & Proxy
+import { Router } from './router.js';
+import { HomePage } from './pages/HomePage.js';
+// import { SettingsPage } from './pages/SettingsPage.js';
+
 
 export class SpritePool {
   constructor(mountEl, options = {}) {
@@ -37,7 +41,8 @@ export class SpritePool {
       canvas: offscreen,
       options: {
         spriteSize: options.spriteSize ?? 3,
-        maxSprites: options.maxSprites ?? 1500
+        maxSprites: options.maxSprites ?? 1500,
+        interactionType: options.interactionType ?? 'ui' // Add this
       }
     }, [offscreen]);
 
@@ -101,6 +106,15 @@ export class SpritePool {
 
   resetMove() {
     this.worker.postMessage({ type: 'RESET_MOVE' });
+  }
+
+  explodeAt(x, y) {
+    // Repurpose the existing POINTER_DOWN message which the worker is already listening for
+    this.worker.postMessage({
+      type: 'POINTER_DOWN',
+      x: x,
+      y: y
+    });
   }
 
   async mutateTo(layoutController) {

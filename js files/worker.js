@@ -117,6 +117,8 @@ export class SpritePool {
 
     this.canvas = canvas; 
     this.spriteSize = options.spriteSize ?? 3;
+    this.interactionType = options.interactionType ?? 'ui'; // Store interaction type
+    this.lastMorphTime = performance.now(); // Track last morph
     this.ctx = this.canvas.getContext('2d');
     
     this.layoutCenterX = undefined;
@@ -195,8 +197,8 @@ export class SpritePool {
     }
   }
 
-  async mutateTo(layoutGenerator) {
-    this.mutateId++;
+async mutateTo(layoutGenerator) {
+    this.lastMorphTime = performance.now();
     const currentMutateId = this.mutateId;
 
     // Reset dying states safely
@@ -358,6 +360,37 @@ export class SpritePool {
     }
   }
 
+explodeAt(px, py) {
+    if (this.interactionType !== 'ui') return;
+    
+    this.lastMorphTime = performance.now(); // Wake up from sleep
+
+    const radius = this.width * 0.045; 
+    const forceMax = 25; // Adjusted down for velocity-based impulse
+    
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      if (this.data[idx + A] === 0 || this.data[idx + DYING] === 1) continue;
+
+      const dx = this.data[idx + X] - px;
+      const dy = this.data[idx + Y] - py;
+      const distSq = dx * dx + dy * dy;
+
+      if (distSq < radius * radius) {
+        const dist = Math.sqrt(distSq);
+        const force = (1 - dist / radius) * forceMax;
+        const angle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.5;
+
+        // Apply impulse velocity instead of physical displacement
+        this.data[idx + EVX] += Math.cos(angle) * force;
+        this.data[idx + EVY] += Math.sin(angle) * force;
+
+        // Snap PROG to 1 to force it into the idle spring-back state
+        this.data[idx + PROG] = 1; 
+      }
+    }
+  }
+
   _renderLoop(timestamp) {
     const dt = timestamp - this.lastTime;
     this.lastTime = timestamp;
@@ -414,56 +447,81 @@ export class SpritePool {
 
       } else {
         // --- ALIVE STATE ---
-        if (data[idx + PROG] < 1) {
-          data[idx + PROG] += data[idx + SPEED] * data[idx + DRAG] * timeScale;
-          if (data[idx + PROG] > 1) data[idx + PROG] = 1;
+        const timeSinceMorph = timestamp - this.lastMorphTime;
+        const canSleep = timeSinceMorph > 5000;
+        
+        const pdx = data[idx + X] - this.pointerX;
+        const pdy = data[idx + Y] - this.pointerY;
+        const pDistSq = pdx * pdx + pdy * pdy;
+        const hoverRadius = this.width * 0.03; 
+        const hoverRadiusSq = hoverRadius * hoverRadius;
 
-          const t = data[idx + PROG];
-          let ease;
-          if (t < 0.5) {
-            ease = 4 * t * t * t;
-          } else {
-            const val = -2 * t + 2;
-            ease = 1 - (val * val * val * val) / 2; 
+        // Optimization: Skip physics if settled, old enough, and cursor is far away
+        if (canSleep && data[idx + PROG] >= 1 && pDistSq > hoverRadiusSq * 4 && data[idx + TA] === data[idx + A]) {
+          data[idx + X] = data[idx + TX];
+          data[idx + Y] = data[idx + TY];
+          data[idx + EVX] = 0;
+          data[idx + EVY] = 0;
+        } else {
+          // Physics Calculation Block
+          let hoverOffsetX = 0;
+          let hoverOffsetY = 0;
+
+          if (this.interactionType === 'ui' && pDistSq < hoverRadiusSq) {
+            const pDist = Math.sqrt(pDistSq);
+            const fluctuation = 1 + Math.sin(timestamp * 0.005 + i) * 0.5;
+            const force = (1 - pDist / hoverRadius) * 20 * fluctuation;
+            const angle = Math.atan2(pdy, pdx);
+            
+            hoverOffsetX = Math.cos(angle) * force;
+            hoverOffsetY = Math.sin(angle) * force;
           }
 
-          const globalDx = data[idx + TX] - data[idx + SX];
-          const globalDy = data[idx + TY] - data[idx + SY];
+          if (data[idx + PROG] < 1) {
+            data[idx + PROG] += data[idx + SPEED] * data[idx + DRAG] * timeScale;
+            if (data[idx + PROG] > 1) data[idx + PROG] = 1;
 
-          const baseX = data[idx + SX] + globalDx * ease;
-          const baseY = data[idx + SY] + globalDy * ease;
+            const t = data[idx + PROG];
+            let ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
 
-          const turbulenceForce = Math.sin(t * Math.PI); 
-          const swerveStrength = data[idx + CURL_DIR] * 0.05 * turbulenceForce * data[idx + DRAG]; 
-          
-          data[idx + X] = baseX + (-globalDy * swerveStrength);
-          data[idx + Y] = baseY + (globalDx * swerveStrength);
+            const globalDx = data[idx + TX] - data[idx + SX];
+            const globalDy = data[idx + TY] - data[idx + SY];
+
+            const baseX = data[idx + SX] + globalDx * ease;
+            const baseY = data[idx + SY] + globalDy * ease;
+
+            const turbulenceForce = Math.sin(t * Math.PI); 
+            const swerveStrength = data[idx + CURL_DIR] * 0.05 * turbulenceForce * data[idx + DRAG]; 
+            
+            data[idx + X] = baseX + (-globalDy * swerveStrength) + hoverOffsetX;
+            data[idx + Y] = baseY + (globalDx * swerveStrength) + hoverOffsetY;
+          } else {
+            // Apply impulse velocity and friction
+            const friction = Math.exp(Math.log(0.9) * data[idx + DRAG] * timeScale);
+            data[idx + EVX] *= friction;
+            data[idx + EVY] *= friction;
+            
+            data[idx + X] += data[idx + EVX] * timeScale;
+            data[idx + Y] += data[idx + EVY] * timeScale;
+
+            // Idle Spring-back
+            const easeBack = 1 - Math.exp(Math.log(0.7) * timeScale);
+            data[idx + X] += ((data[idx + TX] + hoverOffsetX) - data[idx + X]) * easeBack;
+            data[idx + Y] += ((data[idx + TY] + hoverOffsetY) - data[idx + Y]) * easeBack;
+          }
+
+          // Kinetic Alpha / Speed calc
+          const vx = (data[idx + X] - oldX) / timeScale;
+          const vy = (data[idx + Y] - oldY) / timeScale;
+          const speed = Math.sqrt(vx * vx + vy * vy); 
+          const dist = Math.sqrt((data[idx + TX] - data[idx + X])**2 + (data[idx + TY] - data[idx + Y])**2);
+
+          const kineticAlpha = Math.max(0.1, Math.min(1.5, (speed/4) * 0.6));
+          let deadzoneMix = dist < 5 ? 1 : (dist < 15 ? 1 - ((dist - 5) / 10) : 0);
+
+          const desiredAlpha = (1 - deadzoneMix) * kineticAlpha + deadzoneMix * data[idx + TA];
+          data[idx + A] += (desiredAlpha - data[idx + A]) * (1 - Math.exp(Math.log(0.8) * timeScale));
         }
-
-        // Kinetic Alpha / Speed calc (ONLY runs if Alive)
-        const vx = (data[idx + X] - oldX) / timeScale;
-        const vy = (data[idx + Y] - oldY) / timeScale;
-        const speedSq = vx * vx + vy * vy; 
-        const speed = Math.sqrt(speedSq); 
-
-        const targetDistSq = (data[idx + TX] - data[idx + X])**2 + (data[idx + TY] - data[idx + Y])**2;
-        const dist = Math.sqrt(targetDistSq);
-
-        const kineticAlpha = (speed/4) * 0.6;
-        const clampedKineticAlpha = Math.max(0.1, Math.min(1.5, kineticAlpha));
-
-        let deadzoneMix = 0;
-        if (dist < 5) {
-          deadzoneMix = 1;
-        } else if (dist < 15) {
-          deadzoneMix = 1 - ((dist - 5) / 10);
-        }
-
-        const desiredAlpha = (1 - deadzoneMix) * clampedKineticAlpha + deadzoneMix * data[idx + TA];
-        const alphaEaseBase = 1 - 0.2;
-        const alphaEase = 1 - Math.exp(Math.log(alphaEaseBase) * timeScale);
-        
-        data[idx + A] += (desiredAlpha - data[idx + A]) * alphaEase;
       }
 
       // 3. Floating-Point Hard Clamp & Drawing
@@ -730,6 +788,9 @@ self.onmessage = async (e) => {
         pool.pointerX = data.x;
         pool.pointerY = data.y;
       }
+      break;
+    case 'POINTER_DOWN':
+      if (pool) pool.explodeAt(data.x, data.y);
       break;
     case 'MOVE_TO':
       if (pool) pool.moveTo(data.x, data.y);
