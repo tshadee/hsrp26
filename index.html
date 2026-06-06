@@ -9,7 +9,6 @@
 
 <body>
 
-
   <div id="gatekeeper">
     <div class="gatekeeper-ui">
       <div id="gatekeeper-text">Loading...</div>
@@ -19,28 +18,22 @@
     </div>
   </div>
 
-
   <nav class="nav-bar">
     <div class="nav-container">
-
         <div class="nav-left">
           <div class="nav-item" id="pool-hsrp-logo"></div>
         </div>
-
         <div class="nav-middle">
           <div class="nav-item" id="pool-nav-1"></div>
           <div class="nav-item" id="pool-nav-2"></div>
           <div class="nav-item" id="pool-nav-3"></div>
         </div>
-
         <div class="nav-right">
           <div class="nav-item" id="pool-nav-time"></div>
         </div>
-
     </div>
   </nav>
 
-  <!-- ── Page ──────────────────────────────────────────────────────────────── -->
   <main class="hero">
         <div id="hero-left-arrow" class="hero-arrow"></div>
         <div id="hero-mount" class="hero-mount" aria-label="hero display"></div>
@@ -50,8 +43,7 @@
         <div id="hero-right-arrow" class="hero-arrow"></div>
   </main>
 
-  <!-- ──  engine  ────────────────────────────────────────── -->
-<script type="module">
+  <script type="module">
   // ─── PRELOADER ───────────────────────────────────────
   
   // 1. Define all the files you need to load
@@ -62,12 +54,27 @@
     'question', 'slash', 'period', 'exclamation', 'at', 'hash', 'dollar', 'percent', 'caret', 'ampersand', 'asterisk', 'left_paren', 'right_paren', 'space', 'comma', 'apostrophe', 'quotation', 'semicolon', 'colon', 'less_than', 'greater_than', 'plus', 'equals', 'dash', 'left_brace', 'right_brace', 'left_bracket', 'right_bracket', 'pipe', 'tilde', 'backtick'
   ];
   
-  const images = ['hsrp-logo', 'hsrp-logo-inverted', 'hsrp-logo-reduced', 'hsrp-logo-reduced-inverted']; // Add your 10k point images here
+  const images = [
+  'hsrp-logo', 
+  'hsrp-logo-inverted', 
+  'hsrp-logo-reduced', 
+  'hsrp-logo-reduced-inverted',
+  'arrow-left-white',
+  'arrow-right-white']; 
+
+  // 2. Define the JS files to prefetch
+  const jsFiles = [
+    './js files/main.js',
+    './js files/router.js',
+    './js files/pages/HomePage.js',
+    './js files/pages/AboutPage.js'
+  ];
 
   // Build the full URLs
   const urlsToFetch = [
     ...letters.map(f => `./shapes/letters/NVMono/${f}.sprites.json`),
-    ...images.map(f => `./shapes/images/${f}.sprites.json`)
+    ...images.map(f => `./shapes/images/${f}.sprites.json`),
+    ...jsFiles
   ];
 
   async function preloadAssets() {
@@ -119,13 +126,13 @@
   preloadAssets();
 
   // ─── MAIN ENGINE (Only runs when called) ────────────────────────
-  
-  import { SpritePool , SpriteWrite , SpriteImage , SpriteGroup } from './js files/main.js';
-  import { Router } from './js files/router.js';
-  import { HomePage } from './js files/pages/HomePage.js';
-  import { AboutPage } from './js files/pages/AboutPage.js';
 
   async function startWebsite() {
+    // Dynamically import JS modules so they don't block the initial loading screen
+    const { SpritePool , SpriteWrite , SpriteImage , SpriteGroup } = await import('./js files/main.js');
+    const { Router } = await import('./js files/router.js');
+    const { HomePage } = await import('./js files/pages/HomePage.js');
+    const { AboutPage } = await import('./js files/pages/AboutPage.js');
 
     // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
@@ -165,7 +172,10 @@
     await heroPool.mutateTo(heroPoolImage);
     await navLogoPool.mutateTo(navLogoImage);
     await navPoolTime.mutateTo(navPoolTimeText);
-    await uiGroup.refresh(); // Generates all 5 texts instantly in a single layout
+
+    setTimeout(async () => {
+      await uiGroup.refresh();
+    }, 500);
 
     // Auto-recalculate absolute coordinates for the UI group on resize
     let resizeTimer;
@@ -246,7 +256,9 @@
     });
 
     // Mount the initial page
-    router.navigateTo(0);
+    setTimeout(() => {
+      router.navigateTo(0);
+    }, 3000);
   }
   </script>
 

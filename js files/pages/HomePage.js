@@ -7,12 +7,12 @@ export class HomePage {
     this.intervalId = null;
     
     this.texts = [
-        'x',
         'hsrp26',
         'hsrp.cc',
         '0123456789\n!@#$%^&*() -_=+[]{}|;:,.<>?/~`',
         'the quick brown fox\njumps over the lazy dog',
-        'THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG'
+        'THE QUICK BROWN FOX\nJUMPS OVER THE LAZY DOG',
+        'x'
     ];
     this.index = 0;
     
@@ -27,7 +27,7 @@ export class HomePage {
     
     // 2. Start the unique sprite looping logic for this page
     this.intervalId = setInterval(() => {
-        if (this.index == 0) {
+        if (this.index == 5) {
             this.heroPool.mutateTo(this.spriteImage);
         } else {
             this.spriteController.morphTo(this.texts[this.index]);
@@ -49,6 +49,7 @@ export class HomePage {
 
   getSpriteConfig() {
     // Provide the current state so the Router knows what to morph to immediately
+    if(this.index == 5){ return this.spriteImage; };
     this.spriteController.config.text = this.texts[this.index];
     return this.spriteController;
   }
