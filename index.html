@@ -8,6 +8,18 @@
 </head>
 
 <body>
+
+
+  <div id="gatekeeper">
+    <div class="gatekeeper-ui">
+      <div id="gatekeeper-text">Loading...</div>
+      <div class="gatekeeper-track">
+        <div id="gatekeeper-bar"></div>
+      </div>
+    </div>
+  </div>
+
+
   <nav class="nav-bar">
     <div class="nav-container">
 
@@ -45,7 +57,77 @@
 
   <!-- ──  engine  ────────────────────────────────────────── -->
 <script type="module">
-    import { SpritePool, SpriteWrite, SpriteImage } from './js files/main.js';
+  // ─── PRELOADER ───────────────────────────────────────
+  
+  // 1. Define all the files you need to load
+  const letters = [
+    'a_lower', 'b_lower', 'c_lower', 'd_lower', 'e_lower', 'f_lower', 'g_lower', 'h_lower', 'i_lower', 'j_lower', 'k_lower', 'l_lower', 'm_lower', 'n_lower', 'o_lower', 'p_lower', 'q_lower', 'r_lower', 's_lower', 't_lower', 'u_lower', 'v_lower', 'w_lower', 'x_lower', 'y_lower', 'z_lower',
+    'A_upper', 'B_upper', 'C_upper', 'D_upper', 'E_upper', 'F_upper', 'G_upper', 'H_upper', 'I_upper', 'J_upper', 'K_upper', 'L_upper', 'M_upper', 'N_upper', 'O_upper', 'P_upper', 'Q_upper', 'R_upper', 'S_upper', 'T_upper', 'U_upper', 'V_upper', 'W_upper', 'X_upper', 'Y_upper', 'Z_upper',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    'question', 'slash', 'period', 'exclamation', 'at', 'hash', 'dollar', 'percent', 'caret', 'ampersand', 'asterisk', 'left_paren', 'right_paren', 'space', 'comma', 'apostrophe', 'quotation', 'semicolon', 'colon', 'less_than', 'greater_than', 'plus', 'equals', 'dash', 'left_brace', 'right_brace', 'left_bracket', 'right_bracket', 'pipe', 'tilde', 'backtick'
+  ];
+  
+  const images = ['hsrp-logo', 'sample_map']; // Add your 10k point images here
+
+  // Build the full URLs
+  const urlsToFetch = [
+    ...letters.map(f => `./shapes/letters/NVMono/${f}.sprites.json`),
+    ...images.map(f => `./shapes/images/${f}.sprites.json`)
+  ];
+
+  async function preloadAssets() {
+    const gatekeeper = document.getElementById('gatekeeper');
+    const bar = document.getElementById('gatekeeper-bar');
+    const text = document.getElementById('gatekeeper-text');
+    
+    // Open the exact same cache the Web Worker uses
+    const cache = await caches.open('hsrp-shapes-v1');
+    let loaded = 0;
+    const total = urlsToFetch.length;
+
+    // Fetch files concurrently
+    const promises = urlsToFetch.map(async (url) => {
+      // Check if it's already cached from a previous visit
+      const cached = await cache.match(url);
+      if (!cached) {
+        try {
+          const response = await fetch(url);
+          if (response.ok) {
+            await cache.put(url, response.clone());
+          }
+        } catch (e) {
+          console.warn(`Failed to preload ${url}`);
+        }
+      }
+      
+      // Update UI
+      loaded++;
+      const progress = (loaded / total) * 100;
+      bar.style.width = `${progress}%`;
+      text.innerText = `Loading Assets... ${Math.round(progress)}%`;
+    });
+
+    await Promise.all(promises);
+
+    // Fade out and start the site
+    text.innerText = "Ready";
+    setTimeout(() => {
+      gatekeeper.style.opacity = '0';
+      setTimeout(() => {
+        gatekeeper.remove();
+        startWebsite(); // Hand over to main engine
+      }, 1000);
+    }, 500);
+  }
+
+  // Start the preloader immediately
+  preloadAssets();
+
+  // ─── MAIN ENGINE (Only runs when called) ────────────────────────
+  
+  import { SpritePool, SpriteWrite, SpriteImage } from './js files/main.js';
+
+  async function startWebsite() {
 
     // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
@@ -154,8 +236,10 @@
         }, 3000);
     }
 
-    cycleText();
-
+    setTimeout(() => {
+      cycleText();
+    },2000)
+  }
 
   </script>
   <!-- <script src="./js files/marine-snow-physics.js"></script> -->

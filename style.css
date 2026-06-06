@@ -1,8 +1,43 @@
 /* style.css */
 body {
-  background-color: #020418; /* Deep, moody blue */
+  background-color: #040627; /* Deep, moody blue */
   margin: 0;
   overflow: hidden; /* Prevents scrollbars */
+}
+
+#gatekeeper {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: #000000; /* Match your site background */
+  z-index: 10000; /* Sit on top of absolutely everything */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.8s ease;
+}
+
+.gatekeeper-ui {
+  width: 250px;
+  font-family: monospace;
+  font-size: 16px;
+  color: #ffffff;
+}
+
+.gatekeeper-track {
+  width: 100%;
+  height: 2px;
+  background-color: #eee;
+  margin-top: 8px;
+}
+
+#gatekeeper-bar {
+  width: 0%;
+  height: 100%;
+  background-color: #ffffff;
+  transition: width 0.1s linear;
 }
 
 .hero-mount {
