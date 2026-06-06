@@ -49,8 +49,11 @@ export class HomePage {
 
   getSpriteConfig() {
     // Provide the current state so the Router knows what to morph to immediately
-    if(this.index == 5){ return this.spriteImage; };
+    if(this.index == 5){ 
+      this.index += 1;
+      return this.spriteImage; };
     this.spriteController.config.text = this.texts[this.index];
+    this.index += 1;
     return this.spriteController;
   }
 }
