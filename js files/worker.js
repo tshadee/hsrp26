@@ -14,6 +14,64 @@ function shuffleArray(array) {
 
 const monitorFPS = 60; 
 
+// Add this near the top of worker.js
+const ramCache = new Map();
+
+class ShapeCache {
+  static get allFilenames() {
+    return [
+      // Lowercase
+      'a_lower', 'b_lower', 'c_lower', 'd_lower', 'e_lower', 'f_lower', 'g_lower', 'h_lower', 'i_lower', 'j_lower', 'k_lower', 'l_lower', 'm_lower', 'n_lower', 'o_lower', 'p_lower', 'q_lower', 'r_lower', 's_lower', 't_lower', 'u_lower', 'v_lower', 'w_lower', 'x_lower', 'y_lower', 'z_lower',
+      // Uppercase
+      'A_upper', 'B_upper', 'C_upper', 'D_upper', 'E_upper', 'F_upper', 'G_upper', 'H_upper', 'I_upper', 'J_upper', 'K_upper', 'L_upper', 'M_upper', 'N_upper', 'O_upper', 'P_upper', 'Q_upper', 'R_upper', 'S_upper', 'T_upper', 'U_upper', 'V_upper', 'W_upper', 'X_upper', 'Y_upper', 'Z_upper',
+      // Numbers
+      '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+      // Symbols
+      'question', 'slash', 'period', 'exclamation', 'at', 'hash', 'dollar', 'percent', 'caret', 'ampersand', 'asterisk', 'left_paren', 'right_paren', 'space', 'comma', 'apostrophe', 'quotation', 'semicolon', 'colon', 'less_than', 'greater_than', 'plus', 'equals', 'dash', 'left_brace', 'right_brace', 'left_bracket', 'right_bracket', 'pipe', 'tilde', 'backtick'
+    ];
+  }
+
+  static async preload(shapesBase) {
+    // Fix the path: since worker is in '/js files/', we need to step back one directory
+    const workerPath = shapesBase.replace(/^\.\//, '../');
+    const cacheStorage = await caches.open('hsrp-shapes-v1');
+
+    const fetchPromises = this.allFilenames.map(async (filename) => {
+      const url = `${workerPath}${filename}.sprites.json`;
+      
+      // 1. Check RAM cache first
+      if (ramCache.has(url)) return;
+
+      // 2. Check persistent Disk Cache
+      let response = await cacheStorage.match(url);
+
+      // 3. If not on disk, fetch from Network and save to Disk
+      if (!response) {
+        try {
+          response = await fetch(url);
+          if (response.ok) {
+             // Clone the response because reading .json() consumes it
+            await cacheStorage.put(url, response.clone());
+          } else {
+             return; // File doesn't exist, skip
+          }
+        } catch (e) {
+          console.warn(`Network fail for ${filename}`);
+          return;
+        }
+      }
+
+      // 4. Parse and store in RAM for 0ms lookup times during morphs
+      const data = await response.json();
+      ramCache.set(url, data.sprites);
+    });
+
+    // Fire all fetches concurrently
+    await Promise.all(fetchPromises);
+    console.log("All letter sprites cached and ready.");
+  }
+}
+
 class SpriteChild {
   constructor() {
     this.curr = { x: 0, y: 0, a: 0 };
@@ -139,29 +197,21 @@ class SpriteChild {
 // ─── Global Sprite Pool ──────────────────────────────────────
 
 export class SpritePool {
-  constructor(mountEl, options = {}) {
-    this.mountEl = mountEl;
+  constructor(canvas, options = {}) {
+    this.canvas = canvas; // This is now the OffscreenCanvas from main.js
     this.spriteSize = options.spriteSize ?? 3;
     this.maxSprites = options.maxSprites ?? 1500; 
     
-    this.canvas = document.createElement('canvas');
-    // canvas will always be fullscren
-    this.canvas.style.position = 'fixed';
-    this.canvas.style.top = '0';
-    this.canvas.style.left = '0';
-    this.canvas.style.pointerEvents = 'none'; // Lets clicks pass through to HTML elements
-    this.canvas.style.zIndex = '10'; 
-    
     this.ctx = this.canvas.getContext('2d');
-    this.mountEl.appendChild(this.canvas);
     
     this.layoutCenterX = undefined;
     this.layoutCenterY = undefined;
     this.originX = undefined;
     this.originY = undefined;
-
-    this._onResize();
-    window.addEventListener('resize', () => this._onResize());
+    
+    // Global pointer tracking for interactivity (updated via messages)
+    this.pointerX = -1000;
+    this.pointerY = -1000;
 
     this.sprites = [];
     for (let i = 0; i < this.maxSprites; i++) {
@@ -175,22 +225,23 @@ export class SpritePool {
     requestAnimationFrame(this._renderLoop);
   }
 
-  _onResize() {
-    // Canvas dimensions are now explicitly tied to the window
-    this.width = window.innerWidth;
-    this.height = window.innerHeight;
+  updateBounds(bounds) {
+    this.width = bounds.windowWidth;
+    this.height = bounds.windowHeight;
     this.canvas.width = this.width;
     this.canvas.height = this.height;
     
-    // Calculate the HTML element's bounding box to determine standard positioning
-    const rect = this.mountEl.getBoundingClientRect();
-    this.originX = rect.left + rect.width / 2;
-    this.originY = rect.top + rect.height / 2;
+    this.originX = bounds.originX;
+    this.originY = bounds.originY;
 
     if (this.layoutCenterX === undefined) {
       this.layoutCenterX = this.originX;
       this.layoutCenterY = this.originY;
     }
+    
+    // Store localized container dimensions for layout generation
+    this.containerWidth = bounds.width;
+    this.containerHeight = bounds.height;
   }
 
   moveTo(newX, newY) {
@@ -220,7 +271,7 @@ export class SpritePool {
     }
   }
 
-  async mutateTo(layoutController) {
+  async mutateTo(layoutGenerator) {
     this.mutateId++;
     const currentMutateId = this.mutateId;
 
@@ -233,12 +284,9 @@ export class SpritePool {
       sprite.shedThreshold = 2; 
     }
 
-    const rect = this.mountEl.getBoundingClientRect();
-    const newLayout = await layoutController.getLayout(rect.width, rect.height, this.spriteSize);
+    const newLayout = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
     
-    if (currentMutateId !== this.mutateId) {
-      return; 
-    }
+    if (currentMutateId !== this.mutateId) return;
     
     const offsetX = this.layoutCenterX;
     const offsetY = this.layoutCenterY;
@@ -431,14 +479,25 @@ export class LayoutController {
 export class LetterParent {
   constructor(letterFilename, shapesBase = './shapes/letters/') {
     this.letterFilename = letterFilename; 
-    this.shapesBase = shapesBase;
+    
+    // Fix the path for the worker context
+    this.workerPath = shapesBase.replace(/^\.\//, '../');
   }
 
   async getLayout() {
+    const url = `${this.workerPath}${this.letterFilename}.sprites.json`;
+    
+    // 1. Instant RAM lookup (Happens 99% of the time)
+    if (ramCache.has(url)) {
+      return ramCache.get(url);
+    }
+
+    // 2. Fallback just in case a morph requests a file before the preloader finishes
     try {
-      const res = await fetch(`${this.shapesBase}${this.letterFilename}.sprites.json`);
+      const res = await fetch(url);
       if (!res.ok) throw new Error('File not found');
       const data = await res.json();
+      ramCache.set(url, data.sprites); // Add it to RAM for next time
       return data.sprites;
     } catch (e) {
       console.warn(`Failed to load shape: ${this.letterFilename}. Ignoring.`);
@@ -448,16 +507,17 @@ export class LetterParent {
 }
 
 export class SpriteWrite extends LayoutController {
-  constructor(text, shapesBase = './shapes/letters/NVMono/', fontSize = 16, densityFactor = 0.4, justify = 'center') {
+  // Now accepts the raw config object sent over the Worker boundary
+  constructor(config) {
     super(); 
-    this.text = text; 
-    this.shapesBase = shapesBase;
-    this.fontSize = fontSize; 
-    this.densityFactor = densityFactor;
-    this.justify = justify;
-    this.pixelMultiplier = 3.5; 
-    this.hs = (-20)*this.fontSize/14; 
-    this.vs = (-5)*this.fontSize/14; 
+    this.text = config.text; 
+    this.shapesBase = config.shapesBase;
+    this.fontSize = config.fontSize; 
+    this.densityFactor = config.densityFactor;
+    this.justify = config.justify;
+    this.pixelMultiplier = config.pixelMultiplier; 
+    this.hs = config.hs; 
+    this.vs = config.vs; 
   }
 
   setFontSize(size) {
@@ -578,3 +638,44 @@ export class SpriteWrite extends LayoutController {
     return finalLayout;
   }
 }
+
+
+let pool = null;
+
+self.onmessage = async (e) => {
+  const data = e.data;
+
+  switch (data.type) {
+    case 'INIT':
+      pool = new SpritePool(data.canvas, data.options);
+      
+      // Start caching immediately in the background using your default path
+      // (This will run silently and not block the render loop)
+      ShapeCache.preload('./shapes/letters/NVMono/');
+      break;
+    case 'UPDATE_BOUNDS':
+      if (pool) pool.updateBounds(data.bounds);
+      break;
+    case 'POINTER_MOVE':
+      if (pool) {
+        pool.pointerX = data.x;
+        pool.pointerY = data.y;
+      }
+      break;
+    case 'MOVE_TO':
+      if (pool) pool.moveTo(data.x, data.y);
+      break;
+    case 'RESET_MOVE':
+      if (pool) pool.resetMove();
+      break;
+    case 'MORPH':
+      if (pool) {
+        // Route the config to the correct local layout generator
+        if (data.layoutType === 'SpriteWrite') {
+          const generator = new SpriteWrite(data.config);
+          await pool.mutateTo(generator);
+        }
+      }
+      break;
+  }
+};

@@ -45,7 +45,7 @@
 
   <!-- ──  engine  ────────────────────────────────────────── -->
   <script type="module">
-    import { SpritePool, SpriteWrite } from './js files/engine.js';
+    import { SpritePool, SpriteWrite } from './js files/main.js';
 
     const heroMount = document.getElementById('hero-mount');
     const heroPool = new SpritePool(heroMount, { maxSprites: 5000, spriteSize: 2});
@@ -71,10 +71,6 @@
     const navMountTime = document.getElementById('pool-nav-time');
     const navPoolTime = new SpritePool(navMountTime, { maxSprites: 1000, spriteSize: 1});
     const navPoolTimeText = new SpriteWrite("00:00:00 am", './shapes/letters/NVMono/', 8).attach(navPoolTime);
-
-
-
-
 
     await heroPool.mutateTo(heroPoolText);
     await navLogoPool.mutateTo(navLogoText);

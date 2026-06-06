@@ -20,6 +20,7 @@ body {
   height: 5vh;
   align-items: center;
   padding: 1vh 0px 1vh 0px;
+  background-color: #010314;
 }
 
 .nav-item {
@@ -54,4 +55,5 @@ body {
   justify-content: center;
   align-items: center;
   padding: 1vh 0px 1vh 0px;
+  background-color: #010314;
 }
