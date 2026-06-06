@@ -446,13 +446,6 @@ export class SpritePool {
 
       this.ctx.globalAlpha = Math.min(1, a);
       this.ctx.fillRect(px, py, this.spriteSize, this.spriteSize);
-
-      if (a > 1.0) {
-        this.ctx.globalCompositeOperation = 'lighter'; 
-        this.ctx.globalAlpha = Math.min(1, a - 1.0);
-        this.ctx.fillRect(px - 1, py - 1, this.spriteSize + 2, this.spriteSize + 2);
-        this.ctx.globalCompositeOperation = 'source-over'; 
-      }
     }
     requestAnimationFrame(this._renderLoop);
   }

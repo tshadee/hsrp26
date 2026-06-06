@@ -144,15 +144,15 @@
     // ── Navigation Pools ──
     const navMount1 = document.getElementById('pool-nav-1');
     const navPool1 = new SpritePool(navMount1, { maxSprites: 500, spriteSize: 1 });
-    const navPool1Text = new SpriteWrite("navp1", 8).attach(navPool1);
+    const navPool1Text = new SpriteWrite("home", 8).attach(navPool1);
 
     const navMount2 = document.getElementById('pool-nav-2');
     const navPool2 = new SpritePool(navMount2, { maxSprites: 500, spriteSize: 1 });
-    const navPool2Text = new SpriteWrite("navp2", 8).attach(navPool2);
+    const navPool2Text = new SpriteWrite("settings", 8).attach(navPool2);
 
     const navMount3 = document.getElementById('pool-nav-3');
     const navPool3 = new SpritePool(navMount3, { maxSprites: 500, spriteSize: 1 });
-    const navPool3Text = new SpriteWrite("navp3", 8).attach(navPool3);
+    const navPool3Text = new SpriteWrite("about", 8).attach(navPool3);
 
     // ── Clock Pool ──
     const navMountTime = document.getElementById('pool-nav-time');
@@ -240,9 +240,7 @@
       cycleText();
     },2000)
   }
-
   </script>
-  <!-- <script src="./js files/marine-snow-physics.js"></script> -->
 
 </body>
 </html>
