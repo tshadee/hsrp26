@@ -1,4 +1,4 @@
-import { SpriteWrite , SpriteImage } from '../main.js';
+import { SpriteWrite, SpriteImage, SpriteGroup } from '../main.js';
 
 export class HomePage {
   constructor(container, heroPool) {
@@ -16,31 +16,48 @@ export class HomePage {
     ];
     this.index = 0;
     
-    // Instantiate the layout controller once
-    this.spriteController = new SpriteWrite(this.texts[0], 14).attach(this.heroPool);
-    this.spriteImage = new SpriteImage("hsrp-logo", 300).attach(this.heroPool);
+    this.spriteController = new SpriteWrite(this.texts[0], 14)
+    .setAnchor(50,75)
+    .setJustify('center')
+    .setAlign('center');
+    this.spriteImage = new SpriteImage("hsrp-logo", 300);
+    this.pageTextController = new SpriteWrite("home", 8, 0.8)
+      .setAnchor(50, 98)
+      .setJustify('center')
+      .setAlign('top');
+
+    this.spriteGroup = new SpriteGroup().attach(heroPool);
+    this.spriteGroup.add(this.spriteController, container);
+    this.spriteGroup.add(this.spriteImage, container);
+    this.spriteGroup.add(this.pageTextController, container);
+
+    // 3. Set initial visibility (hide the image)
+    this.spriteGroup.setChildActive(this.spriteImage, true);
   }
 
   async mount() {
-    // 1. Failsafe HTML injection (empty for now, but ready if needed)
-    this.container.innerHTML = `<div class="page-home"></div>`;
+    this.container.innerHTML = `<div class="page-home"></div>`; 
     
-    // 2. Start the unique sprite looping logic for this page
     this.intervalId = setInterval(() => {
-        if (this.index == 5) {
-            this.heroPool.mutateTo(this.spriteImage);
-        } else {
-            this.spriteController.morphTo(this.texts[this.index]);
-        }
-      this.index = (this.index + 1) % this.texts.length;
+      if (this.index === 5) {
+          this.spriteGroup.setChildActive(this.spriteController, false);
+      } else {
+          this.spriteGroup.setChildActive(this.spriteController, true);
+          
+          // Update the underlying text config
+          this.spriteController.config.text = this.texts[this.index];
+      }
+
+      // Tell the pool to re-evaluate the entire group
+      this.heroPool.mutateTo(this.spriteGroup);
+
+      this.index = (++this.index) % this.texts.length;
     }, 3000);
   }
 
   async unmount() {
-    // 1. Clean up DOM
     this.container.innerHTML = '';
     
-    // 2. Kill the loop so it doesn't bleed into other pages
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
@@ -48,12 +65,15 @@ export class HomePage {
   }
 
   getSpriteConfig() {
-    // Provide the current state so the Router knows what to morph to immediately
-    if(this.index == 5){ 
-      this.index += 1;
-      return this.spriteImage; };
-    this.spriteController.config.text = this.texts[this.index];
-    this.index += 1;
-    return this.spriteController;
+    // For immediate routing handoffs
+    if (this.index === 5) { 
+      this.spriteGroup.setChildActive(this.spriteController, false);
+    } else {
+      this.spriteGroup.setChildActive(this.spriteController, true);
+      this.spriteController.text = this.texts[this.index];
+    }
+    
+    this.index = (this.index + 1) % this.texts.length;
+    return this.spriteGroup; 
   }
 }

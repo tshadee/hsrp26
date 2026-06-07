@@ -4,10 +4,23 @@ const MAX_SPRITES = 10000;
 const DEFAULT_SPRITE_SPEED = 0.02;  
 const DEFAULT_SPRITE_SPEED_VARIANCE = 0.01;
 
+const SPRITE_DRAG_BASE = 0.2;
+const SPRITE_DRAG_VARIANCE = 1.1;
 
-const STRIDE = 18; // 18 floats per sprite
+const SPRITE_SPAWN_RADIUS_BASE = 20;
+const SPRITE_SPAWN_RADIUS_VARIANCE = 30;
 
-// Offsets mapping to your old SpriteChild properties
+const SPRITE_CLICK_FORCE = 25;
+const SPRITE_CLICK_FORCE_RADIUS = 0.045;
+
+const SPRITE_HOVER_RADIUS = 0.03;
+
+const MORPH_TIME_CULLING_MS = 5000;
+
+
+const STRIDE = 19; // 18 floats per sprite
+
+// Offsets mapping 
 const X = 0, Y = 1, A = 2;
 const TX = 3, TY = 4, TA = 5;      // Target
 const SX = 6, SY = 7, SA = 8;      // Start
@@ -15,10 +28,19 @@ const PROG = 9, SPEED = 10, DRAG = 11;
 const DYING = 12, SHED = 13;       // 0 for false, 1 for true
 const EVX = 14, EVY = 15;          // Expel Velocity
 const CURL_DIR = 16, CURL_CW = 17;
+const IS_UI = 18;
 
-function shuffleArray(array) {
+function getSeededRandom(seed) {
+  return function() {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+}
+
+function shuffleArray(array, seed = 12345) {
+  const rng = getSeededRandom(seed);
   for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rng() * (i + 1));
     [array[i], array[j]] = [array[j], array[i]];
   }
   return array;
@@ -26,7 +48,7 @@ function shuffleArray(array) {
 
 const monitorFPS = 60; 
 
-// Add this near the top of worker.js
+
 const ramCache = new Map();
 
 class ShapeCache {
@@ -44,7 +66,6 @@ class ShapeCache {
   }
 
   static async preload(shapesBase) {
-    // Fix the path: since worker is in '/js files/', we need to step back one directory
     const workerPath = shapesBase.replace(/^\.\//, '../');
     const cacheStorage = await caches.open('hsrp-shapes-v1');
 
@@ -93,7 +114,7 @@ export class SpritePool {
     // Allocate memory
     this.data = new Float32Array(this.maxSprites * STRIDE);
     this.activeIndices = new Int32Array(this.maxSprites);
-    this.activeHashes = new Float64Array(this.maxSprites * STRIDE); // Float64 handles massive integer hashes
+    this.activeHashes = new Float64Array(this.maxSprites * STRIDE); 
     this.freeIndices = new Int32Array(this.maxSprites);
     this.deadIndices = new Int32Array(this.maxSprites);
     this.remainingTargets = []; // Reusable array for leftover targets
@@ -109,7 +130,7 @@ export class SpritePool {
       this.data[idx + TA] = 0;
       this.data[idx + CURL_DIR] = Math.random() * 2 - 1;
       this.data[idx + CURL_CW] = Math.random() * 2 - 1;
-      this.data[idx + DRAG] = 0.2 + Math.random() * 1.1;
+      this.data[idx + DRAG] = SPRITE_DRAG_BASE + Math.random() * SPRITE_DRAG_VARIANCE;
       this.data[idx + SPEED] = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
       this.data[idx + SHED] = 2; 
       this.data[idx + DYING] = 0;
@@ -161,8 +182,8 @@ export class SpritePool {
     this.containerHeight = bounds.height;
   }
 
-  // --- NEW HELPER: Replaces sprite.set() ---
-  setSpriteTarget(idx, tx, ty, ta) {
+
+  setSpriteTarget(idx, tx, ty, ta, isUI = 0) {
     this.data[idx + SX] = this.data[idx + X];
     this.data[idx + SY] = this.data[idx + Y];
     this.data[idx + SA] = this.data[idx + A];
@@ -170,6 +191,7 @@ export class SpritePool {
     if (tx !== undefined) this.data[idx + TX] = tx;
     if (ty !== undefined) this.data[idx + TY] = ty;
     if (ta !== undefined) this.data[idx + TA] = ta; 
+    if (isUI !== undefined) this.data[idx + IS_UI] = isUI; // Write the flag
 
     this.data[idx + PROG] = 0; 
     this.data[idx + SPEED] = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
@@ -197,9 +219,20 @@ export class SpritePool {
     }
   }
 
-async mutateTo(layoutGenerator) {
+  async mutateTo(layoutGenerator) {
     this.lastMorphTime = performance.now();
     const currentMutateId = this.mutateId;
+
+    const result = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
+    if (currentMutateId !== this.mutateId) return;
+    
+    const newLayout = result.layout || result;
+    const zones = result.zones || [];
+
+    self.postMessage({ type: 'INTERACTIVE_ZONES', zones: zones });
+
+    const offsetX = this.layoutCenterX || 0;
+    const offsetY = this.layoutCenterY || 0;
 
     // Reset dying states safely
     for (let i = 0; i < this.maxSprites; i++) {
@@ -210,166 +243,173 @@ async mutateTo(layoutGenerator) {
       this.data[idx + SHED] = 2; 
     }
 
-    const newLayout = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
-    if (currentMutateId !== this.mutateId) return;
-    
-    const offsetX = this.layoutCenterX || 0;
-    const offsetY = this.layoutCenterY || 0;
-
     let activeCount = 0;
     let deadCount = 0;
+    let freeCount = 0; // Initialize freeCount early
 
-    // 1. Calculate EXACT Integer Hashes
+    // 1. Calculate EXACT Hashes & Route Dying Sprites
     for (let i = 0; i < this.maxSprites; i++) {
       let idx = i * STRIDE;
       
       if (this.data[idx + A] > 0.01 || this.data[idx + TA] > 0) {
-        this.activeIndices[activeCount] = idx;
-        
-        // Integer Hashing: Replaces the old `${x},${y}` string map
-        const rx = Math.round(this.data[idx + TX]) + 10000;
-        const ry = Math.round(this.data[idx + TY]) + 10000;
-        this.activeHashes[idx] = (ry * 100000) + rx;
-        
-        activeCount++;
+        if (this.data[idx + DYING] === 1) {
+          // TARGET STEALING FIX: It's dying. Its target is a fake garbage-collection destination.
+          // Route it straight to the free pool so it cannot exact-match and steal a real target.
+          this.freeIndices[freeCount++] = idx;
+        } else {
+          this.activeIndices[activeCount] = idx;
+          // PRECISION FIX: fround forces JS Float64s into Float32 precision before rounding
+          const tx32 = Math.fround(this.data[idx + TX]);
+          const ty32 = Math.fround(this.data[idx + TY]);
+          const rx = Math.round(tx32) + 10000;
+          const ry = Math.round(ty32) + 10000;
+          this.activeHashes[idx] = (ry * 100000) + rx;
+          activeCount++;
+        }
       } else {
-        this.deadIndices[deadCount] = idx;
-        deadCount++;
+        this.deadIndices[deadCount++] = idx;
       }
     }
 
-    // 2. Sort Active Sprites by Hash
+    // 2. Sort Active Sprites & Targets by Exact Hash
     const activeView = this.activeIndices.subarray(0, activeCount);
     activeView.sort((idxA, idxB) => this.activeHashes[idxA] - this.activeHashes[idxB]);
 
-    // 3. Prepare and Sort Targets by Hash
     const targetCount = newLayout.length;
     for (let i = 0; i < targetCount; i++) {
        const pt = newLayout[i];
-       
-       // Detect absolute coordinates from SpriteGroups
        pt.tx = pt.isAbsolute ? pt.x : pt.x + offsetX;
        pt.ty = pt.isAbsolute ? pt.y : pt.y + offsetY;
        
-       const rx = Math.round(pt.tx) + 10000;
-       const ry = Math.round(pt.ty) + 10000;
+       // PRECISION FIX: Match the fround logic of the sprites
+       const tx32 = Math.fround(pt.tx);
+       const ty32 = Math.fround(pt.ty);
+       const rx = Math.round(tx32) + 10000;
+       const ry = Math.round(ty32) + 10000;
        pt.hash = (ry * 100000) + rx;
     }
     newLayout.sort((a, b) => a.hash - b.hash);
 
-    // 4. Two-Pointer Exact Intersection (The "Locking" Phase)
-    let pA = 0; // Pointer for Active
-    let pT = 0; // Pointer for Targets
-    let freeCount = 0;
-    
-    // Clear reusable array safely
+    // 3. Two-Pointer EXACT Intersection (The "Locking" Phase)
+    let pA = 0;
+    let pT = 0;
     this.remainingTargets.length = 0; 
 
     while (pA < activeCount && pT < targetCount) {
       let idx = activeView[pA];
       let hashA = this.activeHashes[idx];
       let target = newLayout[pT];
-      let hashT = target.hash;
 
-      if (hashA === hashT) {
-        // EXACT MATCH: Lock the sprite in place
+      if (hashA === target.hash) {
+        // EXACT MATCH: Bypass wake state to lock it perfectly asleep
         this.data[idx + DYING] = 0;
         this.data[idx + SHED] = 2;
-        this.setSpriteTarget(idx, target.tx, target.ty, target.a ?? 1);
-        pA++; 
-        pT++;
-      } else if (hashA < hashT) {
-        // Active sprite has no matching target (Free Agent)
-        this.freeIndices[freeCount++] = idx;
+        this.data[idx + TA] = target.a ?? 1;
+        this.data[idx + IS_UI] = target.isUI ?? 0;
+        pA++; pT++;
+      } else if (hashA < target.hash) {
+        this.freeIndices[freeCount++] = idx; // Appends to the pre-populated dying sprites
         pA++;
       } else {
-        // Target has no matching sprite (Unclaimed)
         this.remainingTargets.push(target);
         pT++;
       }
     }
 
-    // Sweep up leftovers
     while (pA < activeCount) this.freeIndices[freeCount++] = activeView[pA++];
     while (pT < targetCount) this.remainingTargets.push(newLayout[pT++]);
 
-    // 5. The Migration Phase (For changed pixels only)
-    const remainingCount = this.remainingTargets.length;
-    const dither = 10;
+    // 4. COARSE SPATIAL HASHING (The "Middleground" Migration Phase)
+    const CHUNK_SIZE = 32; // 32x32 pixel chunks for proximity sorting
 
-    // Sort leftovers spatially to prevent criss-crossing (Restoring your original x+y logic)
-    const freeView = this.freeIndices.subarray(0, freeCount);
-    freeView.sort((idxA, idxB) => (this.data[idxA + X] + this.data[idxA + Y]) - (this.data[idxB + X] + this.data[idxB + Y]));
-    this.remainingTargets.sort((a, b) => (a.tx + a.ty) - (b.tx + b.ty));
+    // Overwrite the activeHashes array with coarse grid hashes to avoid allocating new memory
+    for (let i = 0; i < freeCount; i++) {
+      let idx = this.freeIndices[i];
+      let cx = Math.floor(this.data[idx + X] / CHUNK_SIZE);
+      let cy = Math.floor(this.data[idx + Y] / CHUNK_SIZE);
+      this.activeHashes[idx] = (cy * 10000) + cx; 
+    }
+
+    const freeViewSpatial = this.freeIndices.subarray(0, freeCount);
+    freeViewSpatial.sort((idxA, idxB) => this.activeHashes[idxA] - this.activeHashes[idxB]);
+
+    const remainingCount = this.remainingTargets.length;
+    for (let i = 0; i < remainingCount; i++) {
+      let pt = this.remainingTargets[i];
+      let cx = Math.floor(pt.tx / CHUNK_SIZE);
+      let cy = Math.floor(pt.ty / CHUNK_SIZE);
+      pt.hash = (cy * 10000) + cx; // Reuse the hash property
+    }
+    this.remainingTargets.sort((a, b) => a.hash - b.hash);
+
+    // 5. Linear Zip Assignment & Distance-Based Decimation
+    const MAX_MORPH_DIST = 150; // The maximum pixel distance a sprite will travel
+    const MAX_MORPH_DIST_SQ = MAX_MORPH_DIST * MAX_MORPH_DIST;
+    
+    let targetPointer = 0;
 
     for (let i = 0; i < freeCount; i++) {
-      let idx = freeView[i];
-      this.data[idx + DYING] = 0;
-      this.data[idx + SHED] = 2; 
+      let idx = freeViewSpatial[i];
+      let assigned = false;
 
-      if (i < remainingCount) {
-        const pt = this.remainingTargets[i];
-        this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1);
-      } else {
-        // Excess sprites shed
-        let randomTarget;
-        if (remainingCount > 0) {
-          randomTarget = this.remainingTargets[Math.floor(Math.random() * remainingCount)];
-        } else if (targetCount > 0) {
-          randomTarget = newLayout[Math.floor(Math.random() * targetCount)];
-        } else {
-          randomTarget = { tx: this.layoutCenterX, ty: this.layoutCenterY, a: 0 };
+      // Try to map to the current target
+      if (targetPointer < remainingCount) {
+        const pt = this.remainingTargets[targetPointer];
+        const dx = this.data[idx + X] - pt.tx;
+        const dy = this.data[idx + Y] - pt.ty;
+
+        // Only assign if it is within a reasonable distance!
+        if (dx * dx + dy * dy < MAX_MORPH_DIST_SQ) {
+          this.data[idx + DYING] = 0;
+          this.data[idx + SHED] = 2; 
+          this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1, pt.isUI ?? 0);
+          targetPointer++;
+          assigned = true;
         }
-        this.setSpriteTarget(idx, randomTarget.tx, randomTarget.ty, 0); 
+      }
+
+      // If it wasn't assigned (target too far, or out of targets), it MUST decimate
+      if (!assigned) {
+        let randomTarget = remainingCount > 0 
+            ? this.remainingTargets[Math.floor(Math.random() * remainingCount)]
+            : (targetCount > 0 ? newLayout[Math.floor(Math.random() * targetCount)] : { tx: this.layoutCenterX, ty: this.layoutCenterY, a: 0 });
+            
+        this.setSpriteTarget(idx, randomTarget.tx, randomTarget.ty, 0, randomTarget.isUI ?? 0); 
         this.data[idx + SHED] = 0.1 + Math.random() * 0.2; 
       }
     }
 
-    // 6. Spawn Phase
-    let spawnedCount = 0;
-    while (freeCount + spawnedCount < remainingCount && deadCount > 0) {
+    // 6. Localized Spawn Phase (For unfulfilled targets)
+    // We start from targetPointer, as those are the targets that were too far away
+    while (targetPointer < remainingCount && deadCount > 0) {
       deadCount--;
       let idx = this.deadIndices[deadCount]; 
-      const pt = this.remainingTargets[freeCount + spawnedCount];
+      const pt = this.remainingTargets[targetPointer];
       
-      let guideIdx = -1;
-      if (freeCount > 0) {
-        guideIdx = freeView[Math.floor(Math.random() * freeCount)];
-      }
-
-      if (guideIdx !== -1) {
-        const angle = Math.random() * Math.PI * 2; 
-        const radius = 20 + Math.random() * 30; 
-        this.data[idx + X] = this.data[guideIdx + X] + Math.cos(angle) * radius;
-        this.data[idx + Y] = this.data[guideIdx + Y] + Math.sin(angle) * radius;
-      } else {
-        // Spawn in a dithered sphere around the intended target coordinate
-        const angle = Math.random() * Math.PI * 2;
-        const radius = 20 + Math.random() * 30; // Adjust radius here for wider/tighter initial spawn
-        this.data[idx + X] = pt.tx + Math.cos(angle) * radius;
-        this.data[idx + Y] = pt.ty + Math.sin(angle) * radius;
-      }
-
+      // Localized random sphere around the target
+      const angle = Math.random() * Math.PI * 2;
+      const radius = SPRITE_SPAWN_RADIUS_BASE + Math.random() * SPRITE_SPAWN_RADIUS_VARIANCE; 
+      this.data[idx + X] = pt.tx + Math.cos(angle) * radius;
+      this.data[idx + Y] = pt.ty + Math.sin(angle) * radius;
       this.data[idx + A] = 0; 
       this.data[idx + DYING] = 0;
       this.data[idx + SHED] = 2; 
-      this.data[idx + DRAG] = 0.2 + Math.random() * 1.5;
+      this.data[idx + DRAG] = SPRITE_DRAG_BASE + Math.random() * SPRITE_DRAG_VARIANCE;
       
-      this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1);
-      spawnedCount++;
+      this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1, pt.isUI ?? 0);
+      targetPointer++;
     }
   }
 
 explodeAt(px, py) {
-    if (this.interactionType !== 'ui') return;
-    
     this.lastMorphTime = performance.now(); // Wake up from sleep
 
-    const radius = this.width * 0.045; 
-    const forceMax = 25; // Adjusted down for velocity-based impulse
+    const radius = this.width * SPRITE_CLICK_FORCE_RADIUS; 
+    const forceMax = SPRITE_CLICK_FORCE; 
     
     for (let i = 0; i < this.maxSprites; i++) {
       let idx = i * STRIDE;
+      if (this.interactionType !== 'ui' && this.data[idx + IS_UI] !== 1) continue;
       if (this.data[idx + A] === 0 || this.data[idx + DYING] === 1) continue;
 
       const dx = this.data[idx + X] - px;
@@ -434,7 +474,7 @@ explodeAt(px, py) {
         data[idx + X] += data[idx + EVX] * timeScale;
         data[idx + Y] += data[idx + EVY] * timeScale;
         
-        const decayBase = 1 - 0.05;
+        const decayBase = 1 - 0.1;
         const deathDecay = 1 - Math.exp(Math.log(decayBase) * timeScale); 
         data[idx + A] += (0 - data[idx + A]) * deathDecay;
         
@@ -448,12 +488,12 @@ explodeAt(px, py) {
       } else {
         // --- ALIVE STATE ---
         const timeSinceMorph = timestamp - this.lastMorphTime;
-        const canSleep = timeSinceMorph > 5000;
+        const canSleep = timeSinceMorph > MORPH_TIME_CULLING_MS;
         
         const pdx = data[idx + X] - this.pointerX;
         const pdy = data[idx + Y] - this.pointerY;
         const pDistSq = pdx * pdx + pdy * pdy;
-        const hoverRadius = this.width * 0.03; 
+        const hoverRadius = this.width * SPRITE_HOVER_RADIUS; 
         const hoverRadiusSq = hoverRadius * hoverRadius;
 
         // Optimization: Skip physics if settled, old enough, and cursor is far away
@@ -467,7 +507,7 @@ explodeAt(px, py) {
           let hoverOffsetX = 0;
           let hoverOffsetY = 0;
 
-          if (this.interactionType === 'ui' && pDistSq < hoverRadiusSq) {
+          if ((this.interactionType === 'ui' || data[idx + IS_UI] === 1) && pDistSq < hoverRadiusSq) {
             const pDist = Math.sqrt(pDistSq);
             const fluctuation = 1 + Math.sin(timestamp * 0.005 + i) * 0.5;
             const force = (1 - pDist / hoverRadius) * 20 * fluctuation;
@@ -563,8 +603,8 @@ export class ShapeParent {
     const directories = {
         'letter': 'letters/NVMono/',
         'image': 'images/',
-        'shape': 'geometric/', // Future proofing
-        '3Dshape': 'models/'   // Future proofing
+        'shape': 'shapes/', 
+        '3Dshape': '3dshapes/'   
     };
 
     const targetDir = directories[type] || '';
@@ -595,11 +635,12 @@ export class SpriteWrite extends LayoutController {
   constructor(config) {
     super(); 
     this.text = config.text; 
-    this.category = config.category;
-    this.shapesRoot = config.shapesRoot;
     this.fontSize = config.fontSize; 
     this.densityFactor = config.densityFactor;
+    this.anchor = config.anchor;
     this.justify = config.justify;
+    this.align = config.align;
+    this.wrap = config.wrap;
     this.pixelMultiplier = config.pixelMultiplier; 
     this.hs = config.hs; 
     this.vs = config.vs; 
@@ -659,68 +700,210 @@ export class SpriteWrite extends LayoutController {
     return char;
   }
 
-async getLayout(containerWidth, containerHeight, spriteSize) {
+  _parseRichText(rawText) {
+    const chars = [];
+    let isBold = false;
+    let isItalic = false;
+    let currentLinkType = null;
+    let currentLinkTarget = null;
+    
+    // Matches [b], [/b], [a:0], [/a], [h:url], [/h]
+    const tokenRegex = /\[(\/?)(b|i|h|a)(?::(.*?))?\]/g;
+    
+    let lastIndex = 0;
+    let match;
+
+    while ((match = tokenRegex.exec(rawText)) !== null) {
+      // Push preceding normal text
+      const precedingText = rawText.substring(lastIndex, match.index);
+      for (let char of precedingText) {
+        chars.push({ char, isBold, isItalic, linkType: currentLinkType, linkTarget: currentLinkTarget });
+      }
+
+      // Determine tag action
+      const isClosing = match[1] === '/';
+      const tag = match[2];
+      const target = match[3];
+
+      if (tag === 'b') isBold = !isClosing;
+      if (tag === 'i') isItalic = !isClosing;
+      
+      if (tag === 'h') {
+        if (isClosing) { currentLinkType = null; currentLinkTarget = null; }
+        else { currentLinkType = 'hyperlink'; currentLinkTarget = target; }
+      }
+      
+      if (tag === 'a') {
+        if (isClosing) { currentLinkType = null; currentLinkTarget = null; }
+        else { currentLinkType = 'intralink'; currentLinkTarget = target; }
+      }
+
+      lastIndex = tokenRegex.lastIndex;
+    }
+
+    // Push remaining text
+    const remainingText = rawText.substring(lastIndex);
+    for (let char of remainingText) {
+      chars.push({ char, isBold, isItalic, linkType: currentLinkType, linkTarget: currentLinkTarget });
+    }
+
+    return chars;
+  }
+
+  async getLayout(containerWidth, containerHeight, spriteSize) {
     const finalLayout = [];
-    const lines = this.text.split('\n');
+    const interactiveZones = []; // To store bounding boxes
     
     const letterScale = this.fontSize * this.pixelMultiplier;
     const letterArea = letterScale * letterScale;
     const spriteArea = spriteSize * spriteSize;
     const targetSpriteCount = Math.floor((letterArea / spriteArea) * this.densityFactor);
+    const charWidth = letterScale + this.hs; 
 
-    const lineGeometries = lines.map(line => {
-      const width = line.length > 0 
-        ? (line.length * letterScale) + ((line.length - 1) * this.hs) 
-        : 0;
-      return { text: line, width: width };
-    });
+    // 1. Parse string into rich character array
+    let parsedData = this._parseRichText(this.text);
 
-    const maxLineWidth = Math.max(...lineGeometries.map(lg => lg.width));
+    // 2. Wrap Algorithm (modified for rich data)
+    let lines = [];
+    if (this.wrap) {
+        let currentLine = [];
+        let currentLineWidth = 0;
+
+        for (let i = 0; i < parsedData.length; i++) {
+            const token = parsedData[i];
+            
+            if (token.char === '\n') {
+                lines.push({ tokens: currentLine, width: currentLineWidth - this.hs });
+                currentLine = [];
+                currentLineWidth = 0;
+                continue;
+            }
+
+            currentLine.push(token);
+            currentLineWidth += charWidth;
+
+            // Simple char wrap (can be enhanced to word wrap)
+            if (currentLineWidth > containerWidth) {
+                lines.push({ tokens: currentLine, width: currentLineWidth - this.hs });
+                currentLine = [];
+                currentLineWidth = 0;
+            }
+        }
+        if (currentLine.length > 0) lines.push({ tokens: currentLine, width: currentLineWidth - this.hs });
+    } else {
+        // Split strictly by \n
+        let currentLine = [];
+        let currentLineWidth = 0;
+        for (const token of parsedData) {
+            if (token.char === '\n') {
+                lines.push({ tokens: currentLine, width: Math.max(0, currentLineWidth - this.hs) });
+                currentLine = [];
+                currentLineWidth = 0;
+            } else {
+                currentLine.push(token);
+                currentLineWidth += charWidth;
+            }
+        }
+        lines.push({ tokens: currentLine, width: Math.max(0, currentLineWidth - this.hs) });
+    }
+
     const totalHeight = (lines.length * letterScale) + ((lines.length - 1) * this.vs);
 
-    // Center point logic for the block on the Y axis
-    let currentY = -(totalHeight / 2);
+    // 3. Anchor Math Translation
+    // Convert 0-100% to actual local coordinates (-width/2 to +width/2)
+    const anchorPointX = (this.anchor.x / 100 - 0.5) * containerWidth;
+    const anchorPointY = (this.anchor.y / 100 - 0.5) * containerHeight;
 
-    for (const lineGeo of lineGeometries) {
+    let currentY = 0;
+    if (this.align === 'top') {
+       currentY = anchorPointY; // Top edge of block starts at anchor
+    } else if (this.align === 'bottom') {
+       currentY = anchorPointY - totalHeight; // Bottom edge of block ends at anchor
+    } else { 
+       currentY = anchorPointY - (totalHeight / 2); // Center of block is at anchor
+    }
+
+    let activeZone = null;
+
+    for (const line of lines) {
       let currentX = 0;
-      
-      // Plot X relative to bounding box limits
       if (this.justify === 'left') {
-        currentX = -(containerWidth / 2);
+        currentX = anchorPointX; // Left edge of text starts at anchor
       } else if (this.justify === 'right') {
-        currentX = (containerWidth / 2) - lineGeo.width;
+        currentX = anchorPointX - line.width; // Right edge of text ends at anchor
       } else { 
-        currentX = -(lineGeo.width / 2);
+        currentX = anchorPointX - (line.width / 2); // Center is on anchor
       }
 
-      for (let i = 0; i < lineGeo.text.length; i++) {
-        const char = lineGeo.text[i];
+      for (let i = 0; i < line.tokens.length; i++) {
+        const token = line.tokens[i];
 
-        if (char !== ' ') {
-          const safeFilename = this._sanitizeChar(char);
+        if (token.linkType) {
+            if (!activeZone) {
+                activeZone = { 
+                    x: currentX, 
+                    y: currentY, 
+                    target: token.linkTarget, 
+                    actionType: token.linkType 
+                };
+            }
+            activeZone.width = (currentX - activeZone.x) + charWidth;
+            activeZone.height = letterScale;
+        } else if (activeZone) {
+            interactiveZones.push({...activeZone});
+            activeZone = null;
+        }
+
+        if (token.char !== ' ') {
+          const safeFilename = this._sanitizeChar(token.char);
           const letterBlueprint = new ShapeParent(safeFilename, 'letter');
-          let spriteData = await letterBlueprint.getLayout();
+          const rawSpriteData = await letterBlueprint.getLayout();
+
+          // Shallow copy to protect the RAM cache!
+          let spriteData = [...rawSpriteData]; 
+          
+          // Density is now a direct percentage of the blueprint's actual point count
+          const targetSpriteCount = Math.max(1, Math.floor(spriteData.length * this.densityFactor));
 
           if (spriteData.length > targetSpriteCount) {
-            shuffleArray(spriteData); 
+            // Seed based on character code and its position in the line
+            const seed = token.char.charCodeAt(0) + (i * 100);
+            shuffleArray(spriteData, seed); 
             spriteData = spriteData.slice(0, targetSpriteCount);
           }
 
+          // Flag for the physics engine
+          const isLinkUI = token.linkType ? 1 : 0; 
+
           for (const pt of spriteData) {
-            finalLayout.push({
-              x: currentX + (pt.x * letterScale),
-              y: currentY + (pt.y * letterScale),
-              a: pt.a
-            });
+            let px = pt.x;
+            let py = pt.y;
+
+            if (token.isItalic) px += (1 - py) * 0.3; 
+
+            let finalX = currentX + (px * letterScale);
+            let finalY = currentY + (py * letterScale);
+
+            // Pass the isUI flag down to the final layout
+            finalLayout.push({ x: finalX, y: finalY, a: pt.a, isUI: isLinkUI });
+
+            if (token.isBold) {
+               finalLayout.push({ x: finalX + (letterScale * 0.08), y: finalY, a: pt.a, isUI: isLinkUI });
+            }
           }
         }
-        
-        currentX += letterScale + this.hs;
+        currentX += charWidth;
+      }
+      
+      // Close any active zone at the end of a line
+      if (activeZone) {
+          interactiveZones.push({...activeZone});
+          activeZone = null;
       }
       currentY += letterScale + this.vs;
     }
-    
-    return finalLayout;
+
+    return { layout: finalLayout, zones: interactiveZones };
   }
 }
 
@@ -739,37 +922,41 @@ export class SpriteImage extends LayoutController {
     
     // Fetch the raw normalized data from the image map
     const imageBlueprint = new ShapeParent(this.filename, 'image');
-    let spriteData = await imageBlueprint.getLayout();
+    const rawSpriteData = await imageBlueprint.getLayout();
 
-    if (!spriteData || spriteData.length === 0) return [];
+    if (!rawSpriteData || rawSpriteData.length === 0) return [];
 
-    // Optional Density Filtering (similar to text)
+    // SHALLOW COPY to protect the deterministic cache
+    let spriteData = [...rawSpriteData];
+
+    // Optional Density Filtering
     const imageArea = this.scale * this.scale;
     const spriteArea = spriteSize * spriteSize;
     const targetSpriteCount = Math.floor((imageArea / spriteArea) * this.densityFactor);
 
     if (spriteData.length > targetSpriteCount) {
-      shuffleArray(spriteData); 
+      let seed = 0;
+      for (let i = 0; i < this.filename.length; i++) {
+        seed = (seed << 5) - seed + this.filename.charCodeAt(i);
+      }
+      
+      shuffleArray(spriteData, Math.abs(seed)); 
       spriteData = spriteData.slice(0, targetSpriteCount);
     }
 
     // Process coordinates
     for (const pt of spriteData) {
       finalLayout.push({
-        // Since image coordinates are normalized 0.0 to 1.0, 
-        // subtracting 0.5 centers the image perfectly around (0,0)
         x: (pt.x - 0.5) * this.scale,
         y: (pt.y - 0.5) * this.scale,
         a: pt.a
       });
     }
     
-    return finalLayout;
+    return { layout: finalLayout, zones: [] };
   }
 }
 
-
-let pool = null;
 
 self.onmessage = async (e) => {
   const data = e.data;
@@ -777,7 +964,7 @@ self.onmessage = async (e) => {
   switch (data.type) {
     case 'INIT':
       pool = new SpritePool(data.canvas, data.options);
-      // Preload default font (you can adjust this path to match your actual default font folder)
+      // Preload default
       ShapeCache.preload('./shapes/letters/NVMono/');
       break;
     case 'UPDATE_BOUNDS':
@@ -803,7 +990,7 @@ self.onmessage = async (e) => {
         let generator;
         if (data.layoutType === 'SpriteWrite') generator = new SpriteWrite(data.config);
         else if (data.layoutType === 'SpriteImage') generator = new SpriteImage(data.config);
-        else if (data.layoutType === 'SpriteGroup') generator = new SpriteGroup(data.config); // Add this
+        else if (data.layoutType === 'SpriteGroup') generator = new SpriteGroup(data.config); 
         
         if (generator) await pool.mutateTo(generator);
       }
@@ -819,24 +1006,44 @@ export class SpriteGroup extends LayoutController {
 
   async getLayout(containerWidth, containerHeight, spriteSize) {
     const finalLayout = [];
+    const finalZones = [];
     
     for (const child of this.children) {
+      if (child.active === false) continue;
+
       let generator;
       if (child.type === 'SpriteWrite') generator = new SpriteWrite(child.config);
       else if (child.type === 'SpriteImage') generator = new SpriteImage(child.config);
 
       if (generator) {
-        const layout = await generator.getLayout(containerWidth, containerHeight, spriteSize);
+        const result = await generator.getLayout(containerWidth, containerHeight, spriteSize);
+        // Handle the new object format
+        const layout = result.layout || result; 
+        const zones = result.zones || [];
+
         for (const pt of layout) {
           finalLayout.push({
             x: pt.x + child.offsetX,
             y: pt.y + child.offsetY,
             a: pt.a,
-            isAbsolute: true // Flag to bypass the global pool offset
+            isUI: pt.isUI || 0,
+            isAbsolute: true // Bypasses the pool's local center offset
+          });
+        }
+
+        // Apply offsets to the interactive zones as well!
+        for (const zone of zones) {
+          finalZones.push({
+            ...zone,
+            x: zone.x + child.offsetX,
+            y: zone.y + child.offsetY,
+            isAbsolute: true 
           });
         }
       }
     }
-    return finalLayout;
+    return { layout: finalLayout, zones: finalZones };
   }
 }
+
+let pool = null;

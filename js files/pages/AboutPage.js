@@ -1,19 +1,35 @@
-import { SpriteWrite } from '../main.js';
+import { SpriteWrite , SpriteGroup } from '../main.js';
 
 export class AboutPage {
   constructor(container, heroPool) {
     this.container = container;
     this.heroPool = heroPool;
     
-    // A static layout for the about page
-    this.spriteController = new SpriteWrite("about page\n\n\nHydrophase'S RePo 2026\nin development...", 14).attach(this.heroPool);
+    this.spriteController = new SpriteWrite(
+      "[i][b]H[/b]ydrophase'[b]S[/b] [b]R[/b]e[b]P[/b]o[/i] 2026\nwebsite in development...\n\nBack to [a:0]Home Page[/a]\n", 
+      14
+    )
+    .setAnchor(50, 50)
+    .setJustify('center')
+    .setAlign('center')
+    .setWrap(true)
+    .attach(this.heroPool);
+
+    this.pageTextController = new SpriteWrite("about", 8, 0.5)
+    .setAnchor(50,98)
+    .setJustify('center')
+    .setAlign('top')
+    .attach(this.heroPool);
+
+    this.spriteGroup = new SpriteGroup().attach(heroPool);
+    this.spriteGroup.add(this.spriteController, container);
+    this.spriteGroup.add(this.pageTextController, container);
   }
 
   async mount() {
     // Example of failsafe HTML for standard text or links
     this.container.innerHTML = `
-      <div class="page-about" style="position: absolute; bottom: 10%; width: 100%; text-align: center;">
-        <a href="https://hsrp.cc" style="color: white; z-index: 20;">hsrp.cc</a>
+      <div class="page-about">
       </div>
     `;
   }
@@ -23,6 +39,6 @@ export class AboutPage {
   }
 
   getSpriteConfig() {
-    return this.spriteController;
+    return this.spriteGroup;
   }
 }

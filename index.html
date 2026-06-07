@@ -29,7 +29,7 @@
           <div class="nav-item" id="pool-nav-3"></div>
         </div>
         <div class="nav-right">
-          <div class="nav-item" id="pool-nav-time"></div>
+          <div class="nav-item-time" id="pool-nav-time"></div>
         </div>
     </div>
   </nav>
@@ -136,8 +136,13 @@
 
     // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
-    const heroPool = new SpritePool(heroMount, { maxSprites: 25000, spriteSize: 2, interactionType: 'hero'});
-    const heroPoolImage = new SpriteImage("hsrp-logo", 300).attach(heroPool);
+    const heroPool = new SpritePool(heroMount, { 
+        maxSprites: 30000, 
+        spriteSize: 2, 
+        interactionType: 'hero',
+        fullScreen: false 
+    });
+    const heroPoolText = new SpriteWrite("starting...", 14).attach(heroPool);
 
     // ── Logo Pool ──
     const navLogoMount = document.getElementById('pool-hsrp-logo');
@@ -153,8 +158,8 @@
     const navText1 = new SpriteWrite("home", 8);
     const navText2 = new SpriteWrite("settings", 8);
     const navText3 = new SpriteWrite("about", 8);
-    const arrowLeft = new SpriteWrite("<", 15);
-    const arrowRight = new SpriteWrite(">", 15);
+    const arrowLeft = new SpriteWrite("[b]<[/b]", 15);
+    const arrowRight = new SpriteWrite("[b]>[/b]", 15);
 
     // Mount them to their respective visual origins
     uiGroup.add(navText1, document.getElementById('pool-nav-1'));
@@ -165,17 +170,23 @@
 
     // ── Clock Pool ──
     const navMountTime = document.getElementById('pool-nav-time');
-    const navPoolTime = new SpritePool(navMountTime, { maxSprites: 1000, spriteSize: 1, fullScreen: true });
+    const navPoolTime = new SpritePool(navMountTime, { 
+        maxSprites: 1000, 
+        spriteSize: 1, 
+        fullScreen: false
+    });
     const navPoolTimeText = new SpriteWrite("00:00:00 am", 8).attach(navPoolTime);
 
     // Initial Mutations
-    await heroPool.mutateTo(heroPoolImage);
-    await navLogoPool.mutateTo(navLogoImage);
-    await navPoolTime.mutateTo(navPoolTimeText);
+    
+  
 
     setTimeout(async () => {
       await uiGroup.refresh();
-    }, 500);
+      await navPoolTime.mutateTo(navPoolTimeText);
+      await navLogoPool.mutateTo(navLogoImage);
+      await heroPool.mutateTo(heroPoolText);
+    }, 250);
 
     // Auto-recalculate absolute coordinates for the UI group on resize
     let resizeTimer;
@@ -259,6 +270,10 @@
     setTimeout(() => {
       router.navigateTo(0);
     }, 3000);
+
+    window.addEventListener('hsrp-navigate', (e) => {
+      router.navigateTo(e.detail.route);
+    });
   }
   </script>
 

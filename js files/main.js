@@ -34,7 +34,25 @@ export class SpritePool {
     }
     
     const offscreen = this.canvas.transferControlToOffscreen();
+    
+    this.overlayContainer = document.createElement('div');
+    this.overlayContainer.style.position = 'absolute';
+    this.overlayContainer.style.top = '0';
+    this.overlayContainer.style.left = '0';
+    this.overlayContainer.style.width = '100%';
+    this.overlayContainer.style.height = '100%';
+    this.overlayContainer.style.pointerEvents = 'none'; // Let clicks pass through empty space
+    this.overlayContainer.style.zIndex = '20';
+    this.mountEl.appendChild(this.overlayContainer);
+
     this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    
+    // Listen for messages from the worker
+    this.worker.onmessage = (e) => {
+      if (e.data.type === 'INTERACTIVE_ZONES') {
+        this._buildInteractiveZones(e.data.zones);
+      }
+    };
     
     this.worker.postMessage({
       type: 'INIT',
@@ -46,8 +64,44 @@ export class SpritePool {
       }
     }, [offscreen]);
 
+
     this._setupDOMTracking();
     this._setupInputSensors();
+  }
+
+  _buildInteractiveZones(zones) {
+    this.overlayContainer.innerHTML = '';
+    if (!zones || zones.length === 0) return;
+
+    const rect = this.mountEl.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    zones.forEach(zone => {
+      const el = document.createElement('div');
+      el.style.position = 'absolute';
+      el.style.pointerEvents = 'auto'; 
+      el.style.cursor = 'pointer';
+      // el.style.border = '1px solid red'; 
+      
+      // FIX: If the zone came from a SpriteGroup, it already has the offset added!
+      // Don't add centerX/Y again, or it will double-offset and break alignment.
+      el.style.left = zone.isAbsolute ? `${zone.x}px` : `${centerX + zone.x}px`;
+      el.style.top = zone.isAbsolute ? `${zone.y}px` : `${centerY + zone.y}px`;
+      el.style.width = `${zone.width}px`;
+      el.style.height = `${zone.height}px`;
+
+      el.addEventListener('click', (e) => {
+         this.explodeAt(e.clientX, e.clientY);
+         if (zone.actionType === 'hyperlink') {
+            window.open(zone.target, '_blank');
+         } else if (zone.actionType === 'intralink') {
+            window.dispatchEvent(new CustomEvent('hsrp-navigate', { detail: { route: parseInt(zone.target) } }));
+         }
+      });
+
+      this.overlayContainer.appendChild(el);
+    });
   }
 
   _setupDOMTracking() {
@@ -131,7 +185,7 @@ export class SpritePool {
 // ─── Configuration Builders ──────────────────────────────────────
 
 export class SpriteWrite {
-  constructor(text, fontSize = 16, densityFactor = 0.4, justify = 'center') {
+  constructor(text, fontSize = 16, densityFactor = 1.0) {
     this.type = 'SpriteWrite'; 
     this.pool = null;
     
@@ -139,10 +193,13 @@ export class SpriteWrite {
       text: text,
       fontSize: fontSize,
       densityFactor: densityFactor,
-      justify: justify,
+      anchor: { x: 50, y: 50 }, // Default to exact center of container
+      justify: 'center',
+      align: 'center',
+      wrap: false,
       pixelMultiplier: 3.5,
       hs: (-20) * fontSize / 14,
-      vs: (-5) * fontSize / 14
+      vs: (-3) * fontSize / 14
     };
   }
 
@@ -155,23 +212,23 @@ export class SpriteWrite {
     return this;
   }
 
-  setFontSize(size) {
-    this.config.fontSize = size;
-    return this;
-  }
-
-  setFontHS(spacing) {
-    this.config.hs = spacing;
-    return this;
-  }
-
-  setFontVS(spacing) {
-    this.config.vs = spacing;
+  setAnchor(xPercent, yPercent) {
+    this.config.anchor = { x: xPercent, y: yPercent };
     return this;
   }
 
   setJustify(justification) {
     this.config.justify = justification;
+    return this;
+  }
+
+  setAlign(alignment) {
+    this.config.align = alignment;
+    return this;
+  }
+
+  setWrap(shouldWrap) {
+    this.config.wrap = shouldWrap;
     return this;
   }
 
@@ -255,21 +312,35 @@ export class SpriteGroup {
     return this;
   }
 
-  add(layoutController, mountEl) {
+  add(layoutController, mountEl, active = true) {
     layoutController.attach(this);
-    this.children.push({ controller: layoutController, mountEl });
+    this.children.push({ controller: layoutController, mountEl , active});
+    return this;
+  }
+
+  setChildActive(layoutController, isActive) {
+    const target = this.children.find(c => c.controller === layoutController);
+    if (target) {
+      target.active = isActive;
+    }
     return this;
   }
 
   getConfig() {
+    // Determine the pool's bounding box and screen status
+    const poolRect = this.pool ? this.pool.mountEl.getBoundingClientRect() : { left: 0, top: 0 };
+    const isFullScreen = this.pool ? this.pool.fullScreen : true;
+
     return {
       children: this.children.map(c => {
         const rect = c.mountEl.getBoundingClientRect();
         return {
           type: c.controller.type,
           config: c.controller.getConfig(),
-          offsetX: rect.left + rect.width / 2,
-          offsetY: rect.top + rect.height / 2
+          // If non-fullscreen, subtract the pool's position so offsets are strictly local!
+          offsetX: isFullScreen ? rect.left + rect.width / 2 : (rect.left - poolRect.left) + rect.width / 2,
+          offsetY: isFullScreen ? rect.top + rect.height / 2 : (rect.top - poolRect.top) + rect.height / 2,
+          active: c.active
         };
       })
     };

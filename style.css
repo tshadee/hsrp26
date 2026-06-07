@@ -58,6 +58,7 @@ body {
   display: flex;
   width: 5vw;
   height: 94vh;
+  cursor: pointer;
 }
 
 .nav-container {
@@ -77,6 +78,14 @@ body {
   height: 5vh;  
   cursor: pointer;
   z-index: 20;  
+  /* border: 1px solid red; */
+}
+
+.nav-item-time {
+  width: 200px;  
+  height: 5vh;  
+  z-index: 20;  
+  cursor: default;
   /* border: 1px solid red; */
 }
 
