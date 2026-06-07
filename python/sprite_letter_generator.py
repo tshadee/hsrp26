@@ -34,7 +34,7 @@ def generate_typographic_sprites():
     # 1. Configuration
     # font_path = "C:/Windows/Fonts/cour.ttf"
     font_path = "python/NVMono.otf"
-    sprite_count = 50
+    sprite_count = 250
     canvas_size = 300
     charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.!@#$%^&*() -_=+[]{}|;:,.<>?/~`'"
     output_dir = "./shapes/letters/NVMono"

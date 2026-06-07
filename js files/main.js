@@ -252,14 +252,15 @@ export class SpriteWrite {
 }
 
 export class SpriteImage {
-  constructor(filename, scale = 300, densityFactor = 1.0) {
+  constructor(filename, scale = 300, densityFactor = 1.0, isMouseAffected=false) {
     this.type = 'SpriteImage'; 
     this.pool = null;
     
     this.config = {
       filename: filename,
       scale: scale, 
-      densityFactor: densityFactor
+      densityFactor: densityFactor,
+      isUI : isMouseAffected
     };
   }
 
