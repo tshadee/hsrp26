@@ -1,6 +1,6 @@
 import { SpriteWrite, SpriteGroup, SpriteRectangle, SpriteSlider } from '../main.js';
 
-// Define the limits for all your engine variables
+// Define the limits for all engine variables
 const PHYSICS_CONFIGS = [
   { id: 'DEFAULT_SPRITE_SPEED', name: 'SPRITE SPEED', min: 0.005, max: 0.15 },
   { id: 'DEFAULT_SPRITE_SPEED_VARIANCE', name: 'SPEED VARIANCE', min: 0.0, max: 0.15 },
@@ -21,13 +21,10 @@ export class SettingsPage {
     this.container = container;
     this.heroPool = heroPool;
     this.physicsStore = physicsStore; 
-    
-    // Store references to our dynamic sliders so we can morph them later
     this.sliderInstances = {};
 
     this.spriteGroup = new SpriteGroup().attach(heroPool);
 
-    // -- Static Decor --
     this.settingsBorderBox = new SpriteRectangle(35, 80, 0.6)
       .setAnchor(25, 50).setJustify('center').setAlign('center')
       .setLayers(2).setLayerSpacing(8).setLayerDirection('inwards')
@@ -47,7 +44,6 @@ export class SettingsPage {
     this.spriteGroup.add(this.sprite2Controller, container);
     this.spriteGroup.add(this.pageTextController, container);
 
-    // -- Automated Slider Generation --
     this._buildSliders(container);
 
     this.onSliderDrag = this.onSliderDrag.bind(this);

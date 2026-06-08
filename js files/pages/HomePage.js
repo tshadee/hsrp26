@@ -30,8 +30,6 @@ export class HomePage {
     this.spriteGroup.add(this.spriteController, container);
     this.spriteGroup.add(this.spriteImage, container);
     this.spriteGroup.add(this.pageTextController, container);
-
-    // 3. Set initial visibility (hide the image)
     this.spriteGroup.setChildActive(this.spriteImage, true);
   }
 

@@ -1,4 +1,3 @@
-// PhysicsStore.js
 export class PhysicsStore {
   constructor() {
     this.pools = [];
@@ -27,7 +26,7 @@ export class PhysicsStore {
     try {
       const saved = localStorage.getItem(this.storageKey);
       if (saved) {
-        // Merge saved data over defaults in case we added new variables later
+        // Merge saved data over defaults in case new variables added later
         return { ...this.defaults, ...JSON.parse(saved) }; 
       }
     } catch (e) {
@@ -50,7 +49,6 @@ export class PhysicsStore {
     pool.updatePhysics(this.config);
   }
 
-  // Use this for individual slider adjustments
   update(key, value) {
     if (this.config[key] !== undefined) {
       this.config[key] = value;
@@ -59,7 +57,6 @@ export class PhysicsStore {
     }
   }
 
-  // Use this if you ever want a "Reset to Defaults" button
   resetToDefaults() {
     this.config = { ...this.defaults };
     this._saveToStorage();

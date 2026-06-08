@@ -19,19 +19,16 @@ export class Router {
     const currentPage = this.pages[this.currentIndex];
     const nextPage = this.pages[index];
 
-    // Phase 1: DOM Out
+    // 1: DOM Out
     if (currentPage) await currentPage.unmount();
 
-    // Phase 2: Sprite Morph
+    // 2: Sprite Morph
     const nextLayout = nextPage.getSpriteConfig();
     if (nextLayout) {
-      // We don't await this perfectly because we want the DOM to fade in 
-      // while the sprites are settling, not after they completely stop.
       this.heroPool.mutateTo(nextLayout); 
     }
 
-    // Phase 3: DOM In
-    // Give the sprites a small head start before injecting the HTML
+    // 3: DOM In
     setTimeout(async () => {
       await nextPage.mount();
       this.currentIndex = index;
