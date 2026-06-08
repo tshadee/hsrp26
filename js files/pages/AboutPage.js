@@ -15,7 +15,7 @@ export class AboutPage {
     .setWrap(true)
     .attach(this.heroPool);
 
-    this.pageTextController = new SpriteWrite("about", 8, 0.5)
+    this.pageTextController = new SpriteWrite("about", 9, 0.8)
     .setAnchor(50,98)
     .setJustify('center')
     .setAlign('top')

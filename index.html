@@ -67,6 +67,7 @@
     './js files/main.js',
     './js files/router.js',
     './js files/pages/HomePage.js',
+    './js files/pages/SettingsPage.js',
     './js files/pages/AboutPage.js'
   ];
 
@@ -128,11 +129,14 @@
   // ─── MAIN ENGINE (Only runs when called) ────────────────────────
 
   async function startWebsite() {
-    // Dynamically import JS modules so they don't block the initial loading screen
     const { SpritePool , SpriteWrite , SpriteImage , SpriteGroup } = await import('./js files/main.js');
+    const { PhysicsStore } = await import('./js files/PhysicsStore.js');
     const { Router } = await import('./js files/router.js');
     const { HomePage } = await import('./js files/pages/HomePage.js');
     const { AboutPage } = await import('./js files/pages/AboutPage.js');
+    const { SettingsPage } = await import('./js files/pages/SettingsPage.js');
+
+    const physicsStore = new PhysicsStore();
 
     // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
@@ -143,6 +147,7 @@
         fullScreen: false 
     });
     const heroPoolText = new SpriteWrite("starting...", 14).attach(heroPool);
+    physicsStore.register(heroPool);
 
     // ── Logo Pool ──
     const navLogoMount = document.getElementById('pool-hsrp-logo');
@@ -186,7 +191,7 @@
       await navPoolTime.mutateTo(navPoolTimeText);
       await navLogoPool.mutateTo(navLogoImage);
       await heroPool.mutateTo(heroPoolText);
-    }, 250);
+    }, 150);
 
     // Auto-recalculate absolute coordinates for the UI group on resize
     let resizeTimer;
@@ -242,6 +247,7 @@
 
     // Register your page sequence
     router.register(new HomePage(contentContainer, heroPool))
+          .register(new SettingsPage(contentContainer, heroPool, physicsStore))
           .register(new AboutPage(contentContainer, heroPool));
 
     setTimeout(() => {
@@ -261,12 +267,17 @@
         router.navigateTo(0); // Jumps to HomePage
       });
 
+      document.getElementById('pool-nav-2').addEventListener('click', (e) => {
+        uiPool.explodeAt(e.clientX, e.clientY);
+        router.navigateTo(1); // Jumps to SettingsPage
+      });
+
       document.getElementById('pool-nav-3').addEventListener('click', (e) => {
         uiPool.explodeAt(e.clientX, e.clientY);
-        router.navigateTo(1); // Jumps to AboutPage
+        router.navigateTo(2); // Jumps to AboutPage
       });
       router.navigateTo(0);
-    }, 3000);
+    }, 2000);
 
     window.addEventListener('hsrp-navigate', (e) => {
       router.navigateTo(e.detail.route);

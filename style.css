@@ -108,3 +108,15 @@ body {
   align-items: center;
   padding-right: 10px;
 }
+
+@font-face {
+    font-family: 'NVMono';
+    src: url('./fonts/NVMono.otf') format('otf');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+* {
+    font-family: 'NVMono', monospace;
+}

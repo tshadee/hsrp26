@@ -1,6 +1,6 @@
 // main.js - Main Thread Sensor & Proxy
-import { Router } from './router.js';
-import { HomePage } from './pages/HomePage.js';
+// import { Router } from './router.js';
+// import { HomePage } from './pages/HomePage.js';
 // import { SettingsPage } from './pages/SettingsPage.js';
 
 
@@ -171,6 +171,13 @@ export class SpritePool {
     });
   }
 
+  updatePhysics(configObject) {
+    this.worker.postMessage({
+      type: 'UPDATE_PHYSICS_CONFIG',
+      config: configObject
+    });
+  }
+
   async mutateTo(layoutController) {
     // Instead of doing the math here, we serialize the layout controller's config 
     // and instruct the worker to do the heavy fetching and layout generation.
@@ -182,7 +189,7 @@ export class SpritePool {
   }
 }
 
-// ─── Configuration Builders ──────────────────────────────────────
+// ─── El Spirito ──────────────────────────────────────
 
 export class SpriteWrite {
   constructor(text, fontSize = 16, densityFactor = 1.0) {
@@ -349,5 +356,85 @@ export class SpriteGroup {
 
   async refresh() {
     if (this.pool) await this.pool.mutateTo(this);
+  }
+}
+
+export class SpriteRectangle {
+  constructor(widthPercent = 100, heightPercent = 100, densityFactor = 1.0) {
+    this.type = 'SpriteRectangle';
+    this.pool = null;
+    this.group = null;
+    
+    this.config = {
+      width: widthPercent,
+      height: heightPercent,
+      densityFactor: densityFactor,
+      anchor: { x: 50, y: 50 },
+      justify: 'center',
+      align: 'center',
+      layers: 1,                 
+      layerSpacing: 5,           //(in pixels)
+      layerDirection: 'outwards', //('inwards' or 'outwards')
+      cornerRadius: 0
+    };
+  }
+
+  attach(parent) {
+    if (parent.type === 'SpriteGroup') {
+      this.group = parent;
+    } else {
+      this.pool = parent;
+    }
+    return this;
+  }
+
+  setWidth(percent) { this.config.width = percent; return this; }
+  setHeight(percent) { this.config.height = percent; return this; }
+  setAnchor(xPercent, yPercent) { this.config.anchor = { x: xPercent, y: yPercent }; return this; }
+  setJustify(justification) { this.config.justify = justification; return this; }
+  setAlign(alignment) { this.config.align = alignment; return this; }
+  setDensity(density) { this.config.densityFactor = density; return this; }
+  setLayers(numLayers) { this.config.layers = numLayers; return this; }
+  setLayerSpacing(pixels) { this.config.layerSpacing = pixels; return this; }
+  setLayerDirection(direction) { this.config.layerDirection = direction; return this; }
+  setCornerRadius(percent) { this.config.cornerRadius = percent; return this; }
+
+  getConfig() { return this.config; }
+
+  async morphTo(newWidth, newHeight) {
+    this.config.width = newWidth;
+    this.config.height = newHeight;
+    
+    if (this.group) await this.group.refresh();
+    else if (this.pool) await this.pool.mutateTo(this);
+    return this;
+  }
+}
+
+export class SpriteSlider extends SpriteRectangle {
+  constructor(widthPercent = 100, heightPercent = 100, densityFactor = 1.0) {
+    super(widthPercent, heightPercent, densityFactor);
+    this.type = 'SpriteSlider'; 
+    
+    // Set defaults for the ball
+    this.config.ballPosition = 50; // Percentage along the width
+    this.config.ballDiameter = 5;  // Percentage of container size
+  }
+
+  setBallPosition(percent) { 
+    this.config.ballPosition = Math.max(0, Math.min(100, percent)); 
+    return this; 
+  }
+  
+  setBallDiameter(percent) { 
+    this.config.ballDiameter = percent; 
+    return this; 
+  }
+
+  async morphValueTo(newValue) {
+    this.setBallPosition(newValue);
+    if (this.group) await this.group.refresh();
+    else if (this.pool) await this.pool.mutateTo(this);
+    return this;
   }
 }

@@ -1,26 +1,28 @@
-const DEFAULT_SIZE = 4;
+let DEFAULT_SPRITE_SPEED = 0.04;  
+let DEFAULT_SPRITE_SPEED_VARIANCE = 0.04;
+
+let SPRITE_DRAG_BASE = 0.1;
+let SPRITE_DRAG_VARIANCE = 0.4;
+
+let SPRITE_SPAWN_RADIUS_BASE = 20;
+let SPRITE_SPAWN_RADIUS_VARIANCE = 30;
+
+let SPRITE_CLICK_FORCE = 10;
+let SPRITE_CLICK_FORCE_RADIUS = 0.085;
+
+let SPRITE_HOVER_RADIUS = 0.025;
+
+let MORPH_TIME_CULLING_MS = 5000;
+
+let K_ALPHA_MULTIPLIER = 0.85;
+
+let YIELD_BATCH_SIZE_PER_LOOP = 333;
+
+
+//below should not be exposed to user for obvious reasons
+
 const MAX_SPRITES = 50000;
-
-const DEFAULT_SPRITE_SPEED = 0.04;  
-const DEFAULT_SPRITE_SPEED_VARIANCE = 0.04;
-
-const SPRITE_DRAG_BASE = 0.1;
-const SPRITE_DRAG_VARIANCE = 0.4;
-
-const SPRITE_SPAWN_RADIUS_BASE = 20;
-const SPRITE_SPAWN_RADIUS_VARIANCE = 30;
-
-const SPRITE_CLICK_FORCE = 10;
-const SPRITE_CLICK_FORCE_RADIUS = 0.085;
-
-const SPRITE_HOVER_RADIUS = 0.025;
-
-const MORPH_TIME_CULLING_MS = 5000;
-
-const K_ALPHA_MULTIPLIER = 0.85;
-
-
-const STRIDE = 19; // 18 floats per sprite
+const STRIDE = 19; // floats per sprite
 
 // Offsets mapping 
 const X = 0, Y = 1, A = 2;
@@ -87,6 +89,8 @@ function shuffleArray(array, seed = 12345) {
   }
   return array;
 }
+
+const yieldFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
 
 const monitorFPS = 60; 
 
@@ -318,7 +322,7 @@ export class SpritePool {
 
   async mutateTo(layoutGenerator) {
     this.lastMorphTime = performance.now();
-    const currentMutateId = this.mutateId;
+    const currentMutateId = ++this.mutateId;
 
     const result = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
     if (currentMutateId !== this.mutateId) return;
@@ -440,11 +444,23 @@ export class SpritePool {
       this.gridHead[cell] = i;
     }
 
+    // 333 per frame @ 60fps = ~20,000 sprites processed per second
+    const BATCH_SIZE = YIELD_BATCH_SIZE_PER_LOOP;
+
     // 5. Localized Nearest-Neighbor Assignment
     const MAX_MORPH_DIST = 150;
     const MAX_MORPH_DIST_SQ = MAX_MORPH_DIST * MAX_MORPH_DIST;
     
     for (let i = 0; i < freeCount; i++) {
+
+      if (i > 0 && i % BATCH_SIZE === 0) {
+        this.lastMorphTime = performance.now(); // Keep awake
+        await yieldFrame(); 
+        // Abort if the user clicked something else while we were yielding!
+        if (currentMutateId !== this.mutateId) return; 
+      }
+
+
       let idx = this.freeIndices[i];
       let sx = this.data[idx + X];
       let sy = this.data[idx + Y];
@@ -504,6 +520,13 @@ export class SpritePool {
 
     // 6. Localized Spawn Phase (For unfulfilled targets)
     for (let i = 0; i < remainingCount; i++) {
+
+      if (i > 0 && i % BATCH_SIZE === 0) {
+        this.lastMorphTime = performance.now(); // Keep awake
+        await yieldFrame();
+        if (currentMutateId !== this.mutateId) return;
+      }
+
       if (this.targetClaimed[i] === 0) {
         if (deadCount > 0) {
           deadCount--;
@@ -1107,6 +1130,216 @@ export class SpriteImage extends LayoutController {
   }
 }
 
+export class SpriteRectangle extends LayoutController {
+  constructor(config) {
+    super();
+    this.width = config.width;
+    this.height = config.height;
+    this.densityFactor = config.densityFactor;
+    this.anchor = config.anchor;
+    this.justify = config.justify;
+    this.align = config.align;
+    this.layers = config.layers || 1;
+    this.layerSpacing = config.layerSpacing || 5;
+    this.layerDirection = config.layerDirection || 'outwards';
+    this.cornerRadius = config.cornerRadius || 0;
+  }
+
+  async getLayout(containerWidth, containerHeight, spriteSize) {
+    const finalLayout = [];
+    
+    const basePixelWidth = containerWidth * (this.width / 100);
+    const basePixelHeight = containerHeight * (this.height / 100);
+
+    const anchorPointX = (this.anchor.x / 100 - 0.5) * containerWidth;
+    const anchorPointY = (this.anchor.y / 100 - 0.5) * containerHeight;
+
+    let baseStartY = 0;
+    if (this.align === 'top') baseStartY = anchorPointY; 
+    else if (this.align === 'bottom') baseStartY = anchorPointY - basePixelHeight; 
+    else baseStartY = anchorPointY - (basePixelHeight / 2); 
+
+    let baseStartX = 0;
+    if (this.justify === 'left') baseStartX = anchorPointX; 
+    else if (this.justify === 'right') baseStartX = anchorPointX - basePixelWidth; 
+    else baseStartX = anchorPointX - (basePixelWidth / 2); 
+
+    const step = spriteSize / this.densityFactor;
+    const sign = this.layerDirection === 'inwards' ? -1 : 1;
+
+    // Calculate base radius. Using the smallest container dimension so it remains circular.
+    const maxAllowedRadius = Math.min(basePixelWidth, basePixelHeight) / 2;
+    let baseRadius = Math.min(containerWidth, containerHeight) * (this.cornerRadius / 100);
+    baseRadius = Math.min(baseRadius, maxAllowedRadius); // Prevent overlap
+
+    for (let l = 0; l < this.layers; l++) {
+      let delta = l * this.layerSpacing * sign;
+      
+      let currentWidth = basePixelWidth + (2 * delta);
+      let currentHeight = basePixelHeight + (2 * delta);
+      let startX = baseStartX - delta;
+      let startY = baseStartY - delta;
+
+      if (currentWidth <= 0 || currentHeight <= 0) continue;
+
+      // Inner layers get a smaller radius, outer layers get a larger one
+      let r = Math.max(0, baseRadius + delta);
+      r = Math.min(r, Math.min(currentWidth, currentHeight) / 2);
+
+      const straightW = Math.max(0, currentWidth - (2 * r));
+      const straightH = Math.max(0, currentHeight - (2 * r));
+
+      const countTop = Math.floor(straightW / step);
+      const countRight = Math.floor(straightH / step);
+      const countBottom = Math.floor(straightW / step);
+      const countLeft = Math.floor(straightH / step);
+
+      // --- STRAIGHT EDGES ---
+      for(let i = 0; i <= countTop; i++) finalLayout.push({ x: startX + r + (i * step), y: startY, a: 1, isUI: 1 });
+      for(let i = 0; i <= countRight; i++) finalLayout.push({ x: startX + currentWidth, y: startY + r + (i * step), a: 1, isUI: 1 });
+      for(let i = 0; i <= countBottom; i++) finalLayout.push({ x: startX + currentWidth - r - (i * step), y: startY + currentHeight, a: 1, isUI: 1 });
+      for(let i = 0; i <= countLeft; i++) finalLayout.push({ x: startX, y: startY + currentHeight - r - (i * step), a: 1, isUI: 1 });
+
+      // --- CORNER ARCS ---
+      if (r > 0) {
+        const cornerCircum = (Math.PI * 2 * r) / 4;
+        const cornerCount = Math.floor(cornerCircum / step);
+        
+        for(let i = 1; i < cornerCount; i++) {
+          // Top Left
+          const t1 = Math.PI + (Math.PI / 2) * (i / cornerCount);
+          finalLayout.push({ x: startX + r + r * Math.cos(t1), y: startY + r + r * Math.sin(t1), a: 1, isUI: 1 });
+          // Top Right
+          const t2 = 1.5 * Math.PI + (Math.PI / 2) * (i / cornerCount);
+          finalLayout.push({ x: startX + currentWidth - r + r * Math.cos(t2), y: startY + r + r * Math.sin(t2), a: 1, isUI: 1 });
+          // Bottom Right
+          const t3 = 0 + (Math.PI / 2) * (i / cornerCount);
+          finalLayout.push({ x: startX + currentWidth - r + r * Math.cos(t3), y: startY + currentHeight - r + r * Math.sin(t3), a: 1, isUI: 1 });
+          // Bottom Left
+          const t4 = 0.5 * Math.PI + (Math.PI / 2) * (i / cornerCount);
+          finalLayout.push({ x: startX + r + r * Math.cos(t4), y: startY + currentHeight - r + r * Math.sin(t4), a: 1, isUI: 1 });
+        }
+      }
+    }
+
+    return { layout: finalLayout, zones: [] };
+  }
+}
+
+export class SpriteSlider extends SpriteRectangle {
+  constructor(config) {
+    super(config);
+    this.ballPosition = config.ballPosition ?? 50;
+    this.ballDiameter = config.ballDiameter ?? 5;
+  }
+
+  async getLayout(containerWidth, containerHeight, spriteSize) {
+    // 1. Get the track layout from the parent
+    const result = await super.getLayout(containerWidth, containerHeight, spriteSize);
+    
+    // 2. Re-calculate the base track origin points to position the ball
+    const basePixelWidth = containerWidth * (this.width / 100);
+    const basePixelHeight = containerHeight * (this.height / 100);
+    const anchorPointX = (this.anchor.x / 100 - 0.5) * containerWidth;
+    const anchorPointY = (this.anchor.y / 100 - 0.5) * containerHeight;
+
+    let baseStartY = 0;
+    if (this.align === 'top') baseStartY = anchorPointY; 
+    else if (this.align === 'bottom') baseStartY = anchorPointY - basePixelHeight; 
+    else baseStartY = anchorPointY - (basePixelHeight / 2); 
+
+    let baseStartX = 0;
+    if (this.justify === 'left') baseStartX = anchorPointX; 
+    else if (this.justify === 'right') baseStartX = anchorPointX - basePixelWidth; 
+    else baseStartX = anchorPointX - (basePixelWidth / 2); 
+
+    // 3. Ball calculations
+    const ballRadius = Math.min(containerWidth, containerHeight) * (this.ballDiameter / 100) / 2;
+    // Ball snaps to center vertically, and slides along the width horizontally
+    const ballX = baseStartX + (basePixelWidth * (this.ballPosition / 100));
+    const ballY = baseStartY + (basePixelHeight / 2);
+
+    const step = spriteSize / this.densityFactor;
+
+    // 4. Generate a solid filled circle by drawing concentric rings
+    const numRings = Math.max(1, Math.floor(ballRadius / step));
+    
+    for (let r = 0; r <= numRings; r++) {
+      const currentRadius = r * step;
+      
+      // Center dot
+      if (currentRadius === 0) {
+        result.layout.push({ x: ballX, y: ballY, a: 1, isUI: 1 });
+        continue;
+      }
+      
+      const circumference = 2 * Math.PI * currentRadius;
+      const numSprites = Math.floor(circumference / step);
+      
+      for (let i = 0; i < numSprites; i++) {
+        const angle = (i / numSprites) * Math.PI * 2;
+        result.layout.push({
+          x: ballX + Math.cos(angle) * currentRadius,
+          y: ballY + Math.sin(angle) * currentRadius,
+          a: 1, 
+          isUI: 1 // Flag as UI so physics interact with the ball!
+        });
+      }
+    }
+
+    return result;
+  }
+}
+
+export class SpriteGroup extends LayoutController {
+  constructor(config) {
+    super();
+    this.children = config.children;
+  }
+
+  async getLayout(containerWidth, containerHeight, spriteSize) {
+    const finalLayout = [];
+    const finalZones = [];
+    
+    for (const child of this.children) {
+      if (child.active === false) continue;
+
+      let generator;
+      if (child.type === 'SpriteWrite') generator = new SpriteWrite(child.config);
+      else if (child.type === 'SpriteImage') generator = new SpriteImage(child.config);
+      else if (child.type === 'SpriteRectangle') generator = new SpriteRectangle(child.config);
+else if (child.type === 'SpriteSlider') generator = new SpriteSlider(child.config); 
+
+      if (generator) {
+        const result = await generator.getLayout(containerWidth, containerHeight, spriteSize);
+        // Handle the new object format
+        const layout = result.layout || result; 
+        const zones = result.zones || [];
+
+        for (const pt of layout) {
+          finalLayout.push({
+            x: pt.x + child.offsetX,
+            y: pt.y + child.offsetY,
+            a: pt.a,
+            isUI: pt.isUI || 0,
+            isAbsolute: true // Bypasses the pool's local center offset
+          });
+        }
+
+        // Apply offsets to the interactive zones as well!
+        for (const zone of zones) {
+          finalZones.push({
+            ...zone,
+            x: zone.x + child.offsetX,
+            y: zone.y + child.offsetY,
+            isAbsolute: true 
+          });
+        }
+      }
+    }
+    return { layout: finalLayout, zones: finalZones };
+  }
+}
 
 self.onmessage = async (e) => {
   const data = e.data;
@@ -1140,60 +1373,30 @@ self.onmessage = async (e) => {
         let generator;
         if (data.layoutType === 'SpriteWrite') generator = new SpriteWrite(data.config);
         else if (data.layoutType === 'SpriteImage') generator = new SpriteImage(data.config);
-        else if (data.layoutType === 'SpriteGroup') generator = new SpriteGroup(data.config); 
+        else if (data.layoutType === 'SpriteRectangle') generator = new SpriteRectangle(data.config);
+        else if (data.layoutType === 'SpriteGroup') generator = new SpriteGroup(data.config);
         
         if (generator) await pool.mutateTo(generator);
       }
       break;
+    case 'UPDATE_PHYSICS_CONFIG':
+      {
+      const cfg = data.config;
+      if (cfg.DEFAULT_SPRITE_SPEED !== undefined) DEFAULT_SPRITE_SPEED = cfg.DEFAULT_SPRITE_SPEED;
+      if (cfg.DEFAULT_SPRITE_SPEED_VARIANCE !== undefined) DEFAULT_SPRITE_SPEED_VARIANCE = cfg.DEFAULT_SPRITE_SPEED_VARIANCE;
+      if (cfg.SPRITE_DRAG_BASE !== undefined) SPRITE_DRAG_BASE = cfg.SPRITE_DRAG_BASE;
+      if (cfg.SPRITE_DRAG_VARIANCE !== undefined) SPRITE_DRAG_VARIANCE = cfg.SPRITE_DRAG_VARIANCE;
+      if (cfg.SPRITE_SPAWN_RADIUS_BASE !== undefined) SPRITE_SPAWN_RADIUS_BASE = cfg.SPRITE_SPAWN_RADIUS_BASE;
+      if (cfg.SPRITE_SPAWN_RADIUS_VARIANCE !== undefined) SPRITE_SPAWN_RADIUS_VARIANCE = cfg.SPRITE_SPAWN_RADIUS_VARIANCE;
+      if (cfg.SPRITE_CLICK_FORCE !== undefined) SPRITE_CLICK_FORCE = cfg.SPRITE_CLICK_FORCE;
+      if (cfg.SPRITE_CLICK_FORCE_RADIUS !== undefined) SPRITE_CLICK_FORCE_RADIUS = cfg.SPRITE_CLICK_FORCE_RADIUS;
+      if (cfg.SPRITE_HOVER_RADIUS !== undefined) SPRITE_HOVER_RADIUS = cfg.SPRITE_HOVER_RADIUS;
+      if (cfg.MORPH_TIME_CULLING_MS !== undefined) MORPH_TIME_CULLING_MS = cfg.MORPH_TIME_CULLING_MS;
+      if (cfg.K_ALPHA_MULTIPLIER !== undefined) K_ALPHA_MULTIPLIER = cfg.K_ALPHA_MULTIPLIER;
+      if (cfg.YIELD_BATCH_SIZE_PER_LOOP !== undefined) YIELD_BATCH_SIZE_PER_LOOP = cfg.YIELD_BATCH_SIZE_PER_LOOP;
+      }
+      break;
   }
 };
-
-export class SpriteGroup extends LayoutController {
-  constructor(config) {
-    super();
-    this.children = config.children;
-  }
-
-  async getLayout(containerWidth, containerHeight, spriteSize) {
-    const finalLayout = [];
-    const finalZones = [];
-    
-    for (const child of this.children) {
-      if (child.active === false) continue;
-
-      let generator;
-      if (child.type === 'SpriteWrite') generator = new SpriteWrite(child.config);
-      else if (child.type === 'SpriteImage') generator = new SpriteImage(child.config);
-
-      if (generator) {
-        const result = await generator.getLayout(containerWidth, containerHeight, spriteSize);
-        // Handle the new object format
-        const layout = result.layout || result; 
-        const zones = result.zones || [];
-
-        for (const pt of layout) {
-          finalLayout.push({
-            x: pt.x + child.offsetX,
-            y: pt.y + child.offsetY,
-            a: pt.a,
-            isUI: pt.isUI || 0,
-            isAbsolute: true // Bypasses the pool's local center offset
-          });
-        }
-
-        // Apply offsets to the interactive zones as well!
-        for (const zone of zones) {
-          finalZones.push({
-            ...zone,
-            x: zone.x + child.offsetX,
-            y: zone.y + child.offsetY,
-            isAbsolute: true 
-          });
-        }
-      }
-    }
-    return { layout: finalLayout, zones: finalZones };
-  }
-}
 
 let pool = null;
