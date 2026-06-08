@@ -17,7 +17,7 @@ export class PhysicsStore {
       SPRITE_HOVER_RADIUS: 0.015,
       MORPH_TIME_CULLING_MS: 5000,
       K_ALPHA_MULTIPLIER: 0.85,
-      YIELD_BATCH_SIZE_PER_LOOP: 333
+      YIELD_BATCH_SIZE_PER_FRAME: 333
     };
 
     this.config = this._loadFromStorage();

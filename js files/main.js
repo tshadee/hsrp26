@@ -1,8 +1,3 @@
-// main.js - Main Thread Sensor & Proxy
-// import { Router } from './router.js';
-// import { HomePage } from './pages/HomePage.js';
-// import { SettingsPage } from './pages/SettingsPage.js';
-
 
 export class SpritePool {
   constructor(mountEl, options = {}) {
@@ -60,7 +55,7 @@ export class SpritePool {
       options: {
         spriteSize: options.spriteSize ?? 3,
         maxSprites: options.maxSprites ?? 1500,
-        interactionType: options.interactionType ?? 'ui' // Add this
+        interactionType: options.interactionType ?? 'ui'
       }
     }, [offscreen]);
 
@@ -78,17 +73,16 @@ export class SpritePool {
     const centerY = rect.height / 2;
 
     zones.forEach(zone => {
-      // --- NEW SLIDER LOGIC ---
       if (zone.actionType === 'slider') {
         const input = document.createElement('input');
         input.type = 'range';
         input.min = '0';
         input.max = '100';
         input.value = zone.value;
-        input.style.position = 'absolute';
+        input.style.position = 'absolute'; 
         input.style.pointerEvents = 'auto';
         input.style.cursor = 'pointer';
-        input.style.opacity = '0'; // Completely invisible
+        input.style.opacity = '0'; //TODO: change this for debug - actually need to add this to dev menu somehere 
         
         input.style.left = zone.isAbsolute ? `${zone.x}px` : `${centerX + zone.x}px`;
         input.style.top = zone.isAbsolute ? `${zone.y}px` : `${centerY + zone.y}px`;
@@ -119,10 +113,8 @@ export class SpritePool {
       el.style.position = 'absolute';
       el.style.pointerEvents = 'auto'; 
       el.style.cursor = 'pointer';
-      // el.style.border = '1px solid red'; 
+      // el.style.border = '1px solid red';  // TODO: add to debug
       
-      // FIX: If the zone came from a SpriteGroup, it already has the offset added!
-      // Don't add centerX/Y again, or it will double-offset and break alignment.
       el.style.left = zone.isAbsolute ? `${zone.x}px` : `${centerX + zone.x}px`;
       el.style.top = zone.isAbsolute ? `${zone.y}px` : `${centerY + zone.y}px`;
       el.style.width = `${zone.width}px`;
@@ -149,7 +141,7 @@ export class SpritePool {
         bounds: {
           width: this.fullScreen ? window.innerWidth : rect.width,
           height: this.fullScreen ? window.innerHeight : rect.height,
-          // Localized canvases use their own center point
+          // Canvases use their own center point
           originX: this.fullScreen ? rect.left + rect.width / 2 : rect.width / 2,
           originY: this.fullScreen ? rect.top + rect.height / 2 : rect.height / 2,
           windowWidth: this.fullScreen ? window.innerWidth : rect.width,
@@ -200,7 +192,6 @@ export class SpritePool {
   }
 
   explodeAt(x, y) {
-    // Repurpose the existing POINTER_DOWN message which the worker is already listening for
     this.worker.postMessage({
       type: 'POINTER_DOWN',
       x: x,
@@ -216,8 +207,6 @@ export class SpritePool {
   }
 
   async mutateTo(layoutController) {
-    // Instead of doing the math here, we serialize the layout controller's config 
-    // and instruct the worker to do the heavy fetching and layout generation.
     this.worker.postMessage({
       type: 'MORPH',
       layoutType: layoutController.type,
@@ -242,8 +231,8 @@ export class SpriteWrite {
       align: 'center',
       wrap: false,
       pixelMultiplier: 3.5,
-      hs: (-20) * fontSize / 14,
-      vs: (-3) * fontSize / 14
+      hsRatio: -20 / 14, 
+      vsRatio: -3 / 14
     };
   }
 
@@ -296,7 +285,7 @@ export class SpriteWrite {
 }
 
 export class SpriteImage {
-  constructor(filename, scale = 300, densityFactor = 1.0, isMouseAffected=false) {
+  constructor(filename, scale = 300, densityFactor = 1.0, isMouseAffected=false, targetScale = 200) {
     this.type = 'SpriteImage'; 
     this.pool = null;
     
@@ -304,7 +293,9 @@ export class SpriteImage {
       filename: filename,
       scale: scale, 
       densityFactor: densityFactor,
-      isUI : isMouseAffected
+      isUI : isMouseAffected,
+      targetScale: targetScale,
+      aspectRatio: 1.0
     };
   }
 
@@ -382,7 +373,6 @@ export class SpriteGroup {
         return {
           type: c.controller.type,
           config: c.controller.getConfig(),
-          // If non-fullscreen, subtract the pool's position so offsets are strictly local!
           offsetX: isFullScreen ? rect.left + rect.width / 2 : (rect.left - poolRect.left) + rect.width / 2,
           offsetY: isFullScreen ? rect.top + rect.height / 2 : (rect.top - poolRect.top) + rect.height / 2,
           active: c.active

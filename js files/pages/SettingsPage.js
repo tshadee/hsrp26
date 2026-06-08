@@ -13,7 +13,7 @@ const PHYSICS_CONFIGS = [
   { id: 'SPRITE_HOVER_RADIUS', name: 'HOVER RADIUS', min: 0.01, max: 0.1 },
   { id: 'MORPH_TIME_CULLING_MS', name: 'CULLING TIME', min: 1000, max: 5000 },
   { id: 'K_ALPHA_MULTIPLIER', name: 'ALPHA MULTIPLIER', min: 0.1, max: 2.0 },
-  { id: 'YIELD_BATCH_SIZE_PER_LOOP', name: 'BATCH SIZE', min: 50, max: 1000 }
+  { id: 'YIELD_BATCH_SIZE_PER_FRAME', name: 'BATCH SIZE', min: 50, max: 1000 }
 ];
 
 export class SettingsPage {

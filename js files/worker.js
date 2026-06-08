@@ -16,12 +16,12 @@ let MORPH_TIME_CULLING_MS = 2500;
 
 let K_ALPHA_MULTIPLIER = 0.85;
 
-let YIELD_BATCH_SIZE_PER_LOOP = 333;
+let YIELD_BATCH_SIZE_PER_FRAME = 333;
 
 
 //below should not be exposed to user for obvious reasons
 
-const MAX_SPRITES = 50000;
+const MAX_SPRITES = 50000; // TODO: put in debug menu or else someone's PC WILL explode
 const STRIDE = 19; // floats per sprite
 
 // Offsets mapping 
@@ -92,11 +92,9 @@ function shuffleArray(array, seed = 12345) {
 
 const yieldFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
 
-const monitorFPS = 60; 
-
-
 const ramCache = new Map();
 
+//absolute cinema function right here 
 class ShapeCache {
   static get allFilenames() {
     return [
@@ -163,7 +161,7 @@ export class SpritePool {
     this.activeHashes = new Float64Array(this.maxSprites * STRIDE); 
     this.freeIndices = new Int32Array(this.maxSprites);
     this.deadIndices = new Int32Array(this.maxSprites);
-    this.remainingTargets = []; // Reusable array for leftover targets
+    this.remainingTargets = []; // array for leftover targets
     this.gridHead = new Int32Array(22500); // 150 x 150 grid
     this.gridNext = new Int32Array(this.maxSprites);
     this.targetClaimed = new Uint8Array(this.maxSprites);
@@ -190,9 +188,6 @@ export class SpritePool {
     this.interactionType = options.interactionType ?? 'ui'; // Store interaction type
     this.lastMorphTime = performance.now(); // Track last morph
 
-
-
-
     this.gl = this.canvas.getContext('webgl2', { premultipliedAlpha: false }) || 
           this.canvas.getContext('webgl', { premultipliedAlpha: false });
 
@@ -217,13 +212,13 @@ export class SpritePool {
     this.resLoc = gl.getUniformLocation(this.program, "u_resolution");
     this.sizeLoc = gl.getUniformLocation(this.program, "u_spriteSize");
 
-    // 3. Create the massive GPU buffer
+    // 3. Create the GPU buffer
     this.buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     // Allocate GPU memory once using DYNAMIC_DRAW (since we update it every frame)
     gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
 
-    // 4. Teach WebGL how to read your interleaved array
+    // 4. Teach WebGL how to read interleaved array
     const BYTES_PER_FLOAT = 4;
     const STRIDE_BYTES = STRIDE * BYTES_PER_FLOAT;
 
@@ -235,10 +230,6 @@ export class SpritePool {
     // Read 1 float (alpha), skip STRIDE bytes, start at offset 2 floats (8 bytes)
     gl.vertexAttribPointer(this.alphaLoc, 1, gl.FLOAT, false, STRIDE_BYTES, 2 * BYTES_PER_FLOAT);
     
-
-
-
-
     this.layoutCenterX = undefined;
     this.layoutCenterY = undefined;
     this.originX = undefined;
@@ -354,12 +345,10 @@ export class SpritePool {
       
       if (this.data[idx + A] > 0.01 || this.data[idx + TA] > 0) {
         if (this.data[idx + DYING] === 1) {
-          // TARGET STEALING FIX: It's dying. Its target is a fake garbage-collection destination.
-          // Route it straight to the free pool so it cannot exact-match and steal a real target.
           this.freeIndices[freeCount++] = idx;
         } else {
           this.activeIndices[activeCount] = idx;
-          // PRECISION FIX: fround forces JS Float64s into Float32 precision before rounding
+          // fround forces JS Float64s into Float32 precision before rounding
           const tx32 = Math.fround(this.data[idx + TX]);
           const ty32 = Math.fround(this.data[idx + TY]);
           const rx = Math.round(tx32) + 10000;
@@ -382,7 +371,7 @@ export class SpritePool {
        pt.tx = pt.isAbsolute ? pt.x : pt.x + offsetX;
        pt.ty = pt.isAbsolute ? pt.y : pt.y + offsetY;
        
-       // PRECISION FIX: Match the fround logic of the sprites
+       // fround fix, again
        const tx32 = Math.fround(pt.tx);
        const ty32 = Math.fround(pt.ty);
        const rx = Math.round(tx32) + 10000;
@@ -402,7 +391,6 @@ export class SpritePool {
       let target = newLayout[pT];
 
       if (hashA === target.hash) {
-        // EXACT MATCH: Bypass wake state to lock it perfectly asleep
         this.data[idx + DYING] = 0;
         this.data[idx + SHED] = 2;
         this.data[idx + TA] = target.a ?? 1;
@@ -445,7 +433,7 @@ export class SpritePool {
     }
 
     // 333 per frame @ 60fps = ~20,000 sprites processed per second
-    const BATCH_SIZE = YIELD_BATCH_SIZE_PER_LOOP;
+    const BATCH_SIZE = YIELD_BATCH_SIZE_PER_FRAME;
 
     // 5. Localized Nearest-Neighbor Assignment
     const MAX_MORPH_DIST = 150;
@@ -456,7 +444,6 @@ export class SpritePool {
       if (i > 0 && i % BATCH_SIZE === 0) {
         this.lastMorphTime = performance.now(); // Keep awake
         await yieldFrame(); 
-        // Abort if the user clicked something else while we were yielding!
         if (currentMutateId !== this.mutateId) return; 
       }
 
@@ -501,14 +488,14 @@ export class SpritePool {
       }
 
       if (bestTargetIdx !== -1) {
-        // We found a target in range! Claim it.
+        // Claim target in range
         this.targetClaimed[bestTargetIdx] = 1;
         const pt = this.remainingTargets[bestTargetIdx];
         this.data[idx + DYING] = 0;
         this.data[idx + SHED] = 2; 
         this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1, pt.isUI ?? 0);
       } else {
-        // No text targets left within 150px. Decimate and dissolve gracefully.
+        // No text targets left within 150px. Decimate and dissolve.
         let randomTarget = remainingCount > 0 
             ? this.remainingTargets[Math.floor(Math.random() * remainingCount)]
             : (targetCount > 0 ? newLayout[Math.floor(Math.random() * targetCount)] : { tx: this.layoutCenterX, ty: this.layoutCenterY, a: 0 });
@@ -813,8 +800,8 @@ export class SpriteWrite extends LayoutController {
     this.align = config.align;
     this.wrap = config.wrap;
     this.pixelMultiplier = config.pixelMultiplier; 
-    this.hs = config.hs; 
-    this.vs = config.vs; 
+    this.hsRatio = config.hsRatio; 
+    this.vsRatio = config.vsRatio;
   }
 
   setFontSize(size) {
@@ -967,11 +954,19 @@ export class SpriteWrite extends LayoutController {
     const finalLayout = [];
     const interactiveZones = []; // To store bounding boxes
     
-    const letterScale = this.fontSize * this.pixelMultiplier;
+    // 1. Calculate our dynamic vmin scale
+    const vmin = Math.min(containerWidth, containerHeight);
+    const dynamicFontSize = vmin * (this.fontSize / 1000);
+
+    // 2. Apply it to the core variables
+    const letterScale = dynamicFontSize * this.pixelMultiplier;
+    const dynamicHs = dynamicFontSize * this.hsRatio;
+    const dynamicVs = dynamicFontSize * this.vsRatio;
+
     const letterArea = letterScale * letterScale;
     const spriteArea = spriteSize * spriteSize;
     const targetSpriteCount = Math.floor((letterArea / spriteArea) * this.densityFactor);
-    const charWidth = letterScale + this.hs; 
+    const charWidth = letterScale + dynamicHs;
 
     // 1. Parse string into rich character array
     let parsedData = this._parseRichText(this.text);
@@ -986,7 +981,7 @@ export class SpriteWrite extends LayoutController {
             const token = parsedData[i];
             
             if (token.char === '\n') {
-                lines.push({ tokens: currentLine, width: currentLineWidth - this.hs });
+                lines.push({ tokens: currentLine, width: currentLineWidth - dynamicHs });
                 currentLine = [];
                 currentLineWidth = 0;
                 continue;
@@ -995,21 +990,19 @@ export class SpriteWrite extends LayoutController {
             currentLine.push(token);
             currentLineWidth += charWidth;
 
-            // Simple char wrap (can be enhanced to word wrap)
             if (currentLineWidth > containerWidth) {
-                lines.push({ tokens: currentLine, width: currentLineWidth - this.hs });
+                lines.push({ tokens: currentLine, width: currentLineWidth - dynamicHs });
                 currentLine = [];
                 currentLineWidth = 0;
             }
         }
-        if (currentLine.length > 0) lines.push({ tokens: currentLine, width: currentLineWidth - this.hs });
+        if (currentLine.length > 0) lines.push({ tokens: currentLine, width: currentLineWidth - dynamicHs });
     } else {
-        // Split strictly by \n
         let currentLine = [];
         let currentLineWidth = 0;
         for (const token of parsedData) {
             if (token.char === '\n') {
-                lines.push({ tokens: currentLine, width: Math.max(0, currentLineWidth - this.hs) });
+                lines.push({ tokens: currentLine, width: Math.max(0, currentLineWidth - dynamicHs) });
                 currentLine = [];
                 currentLineWidth = 0;
             } else {
@@ -1017,10 +1010,10 @@ export class SpriteWrite extends LayoutController {
                 currentLineWidth += charWidth;
             }
         }
-        lines.push({ tokens: currentLine, width: Math.max(0, currentLineWidth - this.hs) });
+        lines.push({ tokens: currentLine, width: Math.max(0, currentLineWidth - dynamicHs) });
     }
 
-    const totalHeight = (lines.length * letterScale) + ((lines.length - 1) * this.vs);
+    const totalHeight = (lines.length * letterScale) + ((lines.length - 1) * dynamicVs);
 
     // 3. Anchor Math Translation
     // Convert 0-100% to actual local coordinates (-width/2 to +width/2)
@@ -1029,11 +1022,11 @@ export class SpriteWrite extends LayoutController {
 
     let currentY = 0;
     if (this.align === 'top') {
-       currentY = anchorPointY; // Top edge of block starts at anchor
+       currentY = anchorPointY; 
     } else if (this.align === 'bottom') {
-       currentY = anchorPointY - totalHeight; // Bottom edge of block ends at anchor
+       currentY = anchorPointY - totalHeight; 
     } else { 
-       currentY = anchorPointY - (totalHeight / 2); // Center of block is at anchor
+       currentY = anchorPointY - (totalHeight / 2); 
     }
 
     let activeZone = null;
@@ -1117,7 +1110,7 @@ export class SpriteWrite extends LayoutController {
 
           activeZone = null;
       }
-      currentY += letterScale + this.vs;
+      currentY += letterScale + dynamicVs;
     }
 
     return { layout: finalLayout, zones: interactiveZones };
@@ -1133,11 +1126,12 @@ export class SpriteImage extends LayoutController {
     this.scale = config.scale; 
     this.densityFactor = config.densityFactor;
     this.isUI = config.isUI;
+    this.aspectRatio = config.aspectRatio || 1.0;
   }
 
   async getLayout(containerWidth, containerHeight, spriteSize) {
     const finalLayout = [];
-    
+
     // Fetch the raw normalized data from the image map
     const imageBlueprint = new ShapeParent(this.filename, 'image');
     const rawSpriteData = await imageBlueprint.getLayout();
@@ -1146,6 +1140,8 @@ export class SpriteImage extends LayoutController {
 
     // SHALLOW COPY to protect the deterministic cache
     let spriteData = [...rawSpriteData];
+
+    this.scale *= containerHeight / 1080;
 
     // Optional Density Filtering
     const imageArea = this.scale * this.scale;
@@ -1454,7 +1450,7 @@ self.onmessage = async (e) => {
       if (cfg.SPRITE_HOVER_RADIUS !== undefined) SPRITE_HOVER_RADIUS = cfg.SPRITE_HOVER_RADIUS;
       if (cfg.MORPH_TIME_CULLING_MS !== undefined) MORPH_TIME_CULLING_MS = cfg.MORPH_TIME_CULLING_MS;
       if (cfg.K_ALPHA_MULTIPLIER !== undefined) K_ALPHA_MULTIPLIER = cfg.K_ALPHA_MULTIPLIER;
-      if (cfg.YIELD_BATCH_SIZE_PER_LOOP !== undefined) YIELD_BATCH_SIZE_PER_LOOP = cfg.YIELD_BATCH_SIZE_PER_LOOP;
+      if (cfg.YIELD_BATCH_SIZE_PER_FRAME !== undefined) YIELD_BATCH_SIZE_PER_FRAME = cfg.YIELD_BATCH_SIZE_PER_FRAME;
       }
       break;
   }

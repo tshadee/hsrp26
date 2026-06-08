@@ -46,7 +46,7 @@
   <script type="module">
   // ─── PRELOADER ───────────────────────────────────────
   
-  // 1. Define all the files you need to load
+  // Define files to load
   const letters = [
     'a_lower', 'b_lower', 'c_lower', 'd_lower', 'e_lower', 'f_lower', 'g_lower', 'h_lower', 'i_lower', 'j_lower', 'k_lower', 'l_lower', 'm_lower', 'n_lower', 'o_lower', 'p_lower', 'q_lower', 'r_lower', 's_lower', 't_lower', 'u_lower', 'v_lower', 'w_lower', 'x_lower', 'y_lower', 'z_lower',
     'A_upper', 'B_upper', 'C_upper', 'D_upper', 'E_upper', 'F_upper', 'G_upper', 'H_upper', 'I_upper', 'J_upper', 'K_upper', 'L_upper', 'M_upper', 'N_upper', 'O_upper', 'P_upper', 'Q_upper', 'R_upper', 'S_upper', 'T_upper', 'U_upper', 'V_upper', 'W_upper', 'X_upper', 'Y_upper', 'Z_upper',
@@ -62,7 +62,7 @@
   'arrow-left-white',
   'arrow-right-white']; 
 
-  // 2. Define the JS files to prefetch
+  // define js files to load
   const jsFiles = [
     './js files/main.js',
     './js files/router.js',
@@ -71,13 +71,14 @@
     './js files/pages/AboutPage.js'
   ];
 
-  // Build the full URLs
+  // build url
   const urlsToFetch = [
     ...letters.map(f => `./shapes/letters/NVMono/${f}.sprites.json`),
     ...images.map(f => `./shapes/images/${f}.sprites.json`),
     ...jsFiles
   ];
 
+  // dem big preload begins
   async function preloadAssets() {
     const gatekeeper = document.getElementById('gatekeeper');
     const bar = document.getElementById('gatekeeper-bar');
@@ -175,7 +176,7 @@
     const navPoolTime = new SpritePool(navMountTime, { 
         maxSprites: 1000, 
         spriteSize: 1.5, 
-        fullScreen: false
+        fullScreen: true
     });
     const navPoolTimeText = new SpriteWrite("00:00:00 am", 8).attach(navPoolTime);
 
@@ -239,15 +240,16 @@
     const contentContainer = document.getElementById('page-container');
     const router = new Router(heroPool, uiPool);
 
-    // Register your page sequence
+    // Register pages to router... if there are more, add more. Yeah. It's kinda hard to explain.
     router.register(new HomePage(contentContainer, heroPool))
           .register(new SettingsPage(contentContainer, heroPool, physicsStore))
           .register(new AboutPage(contentContainer, heroPool));
+          //^^ this is a circular array so the router.next() / prev() stuff will just loopdeloop
 
     setTimeout(() => {
       document.getElementById('hero-right-arrow').addEventListener('click', (e) => {
         uiPool.explodeAt(e.clientX, e.clientY);
-        router.next();
+        router.next(); 
       });
 
       document.getElementById('hero-left-arrow').addEventListener('click', (e) => {
