@@ -6,7 +6,7 @@ export class AboutPage {
     this.heroPool = heroPool;
     
     this.spriteController = new SpriteWrite(
-      "[i][b]H[/b]ydrophase'[b]S[/b] [b]R[/b]e[b]P[/b]o[/i] 2026\nwebsite in development...\n\nBack to [a:0]Home Page[/a]\n", 
+      "[i][b]H[/b]ydrophase'[b]S[/b] [b]R[/b]e[b]P[/b]o[/i] 2026\nwebsite in development...\n\n[a:0]Back to Home[/a]\n", 
       14
     )
     .setAnchor(50, 50)

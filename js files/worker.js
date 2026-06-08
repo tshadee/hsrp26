@@ -1,4 +1,4 @@
-let DEFAULT_SPRITE_SPEED = 0.04;  
+let DEFAULT_SPRITE_SPEED = 0.15;  
 let DEFAULT_SPRITE_SPEED_VARIANCE = 0.04;
 
 let SPRITE_DRAG_BASE = 0.1;
@@ -12,7 +12,7 @@ let SPRITE_CLICK_FORCE_RADIUS = 0.085;
 
 let SPRITE_HOVER_RADIUS = 0.025;
 
-let MORPH_TIME_CULLING_MS = 5000;
+let MORPH_TIME_CULLING_MS = 2500;
 
 let K_ALPHA_MULTIPLIER = 0.85;
 
@@ -921,6 +921,48 @@ export class SpriteWrite extends LayoutController {
     return chars;
   }
 
+  async _generateLinkBox(zone, containerWidth, containerHeight, spriteSize, finalLayout) {
+    if (zone.actionType !== 'intralink') return; // Only draw for [a] tags!
+
+    // Add a tiny bit of padding so the box frames the text nicely
+    const padding = spriteSize * 2.5; 
+    const boxWidth = zone.width + padding * 2;
+    const boxHeight = zone.height + padding * 2;
+    const boxX = zone.x - padding;
+    const boxY = zone.y - padding;
+
+    // Convert pixel bounds to percentages for SpriteRectangle
+    const rectWidthPct = (boxWidth / containerWidth) * 100;
+    const rectHeightPct = (boxHeight / containerHeight) * 100;
+
+    // Convert local pixel center to 0-100% anchor
+    const centerPx = boxX + (boxWidth / 2);
+    const centerPy = boxY + (boxHeight / 2);
+    const anchorXPct = (centerPx / containerWidth + 0.5) * 100;
+    const anchorYPct = (centerPy / containerHeight + 0.5) * 100;
+
+    const rectGen = new SpriteRectangle({
+        width: rectWidthPct,
+        height: rectHeightPct,
+        densityFactor: 0.6,
+        anchor: { x: anchorXPct, y: anchorYPct },
+        justify: 'center',
+        align: 'center',
+        layers: 1,
+        layerSpacing: 0,
+        layerDirection: 'outwards',
+        cornerRadius: 1 // 1% as requested
+    });
+
+    const rectResult = await rectGen.getLayout(containerWidth, containerHeight, spriteSize);
+    
+    // Inject the generated rectangle sprites directly into the text layout
+    for (const pt of rectResult.layout) {
+        pt.isUI = 1; // Make the border reactive to the cursor
+        finalLayout.push(pt);
+    }
+  }
+
   async getLayout(containerWidth, containerHeight, spriteSize) {
     const finalLayout = [];
     const interactiveZones = []; // To store bounding boxes
@@ -1018,10 +1060,11 @@ export class SpriteWrite extends LayoutController {
                     actionType: token.linkType 
                 };
             }
-            activeZone.width = (currentX - activeZone.x) + charWidth;
+            activeZone.width = (currentX - activeZone.x) + letterScale;
             activeZone.height = letterScale;
         } else if (activeZone) {
             interactiveZones.push({...activeZone});
+            await this._generateLinkBox(activeZone, containerWidth, containerHeight, spriteSize, finalLayout);
             activeZone = null;
         }
 
@@ -1069,6 +1112,9 @@ export class SpriteWrite extends LayoutController {
       // Close any active zone at the end of a line
       if (activeZone) {
           interactiveZones.push({...activeZone});
+
+          await this._generateLinkBox(activeZone, containerWidth, containerHeight, spriteSize, finalLayout);
+
           activeZone = null;
       }
       currentY += letterScale + this.vs;
@@ -1230,14 +1276,15 @@ export class SpriteSlider extends SpriteRectangle {
   constructor(config) {
     super(config);
     this.ballPosition = config.ballPosition ?? 50;
-    this.ballDiameter = config.ballDiameter ?? 5;
+    this.ballDiameter = config.ballDiameter ?? 3;
+    this.id = config.id ?? 'default_slider';
   }
-
+  
   async getLayout(containerWidth, containerHeight, spriteSize) {
-    // 1. Get the track layout from the parent
+    // 1. Get the foundational track layout from the parent
     const result = await super.getLayout(containerWidth, containerHeight, spriteSize);
     
-    // 2. Re-calculate the base track origin points to position the ball
+    // 2. Re-calculate the base track origin points to find the ball's center
     const basePixelWidth = containerWidth * (this.width / 100);
     const basePixelHeight = containerHeight * (this.height / 100);
     const anchorPointX = (this.anchor.x / 100 - 0.5) * containerWidth;
@@ -1255,37 +1302,51 @@ export class SpriteSlider extends SpriteRectangle {
 
     // 3. Ball calculations
     const ballRadius = Math.min(containerWidth, containerHeight) * (this.ballDiameter / 100) / 2;
-    // Ball snaps to center vertically, and slides along the width horizontally
     const ballX = baseStartX + (basePixelWidth * (this.ballPosition / 100));
     const ballY = baseStartY + (basePixelHeight / 2);
 
-    const step = spriteSize / this.densityFactor;
+    const rSq = ballRadius * ballRadius;
 
-    // 4. Generate a solid filled circle by drawing concentric rings
-    const numRings = Math.max(1, Math.floor(ballRadius / step));
-    
-    for (let r = 0; r <= numRings; r++) {
-      const currentRadius = r * step;
-      
-      // Center dot
-      if (currentRadius === 0) {
-        result.layout.push({ x: ballX, y: ballY, a: 1, isUI: 1 });
-        continue;
-      }
-      
-      const circumference = 2 * Math.PI * currentRadius;
-      const numSprites = Math.floor(circumference / step);
-      
-      for (let i = 0; i < numSprites; i++) {
-        const angle = (i / numSprites) * Math.PI * 2;
-        result.layout.push({
-          x: ballX + Math.cos(angle) * currentRadius,
-          y: ballY + Math.sin(angle) * currentRadius,
-          a: 1, 
-          isUI: 1 // Flag as UI so physics interact with the ball!
-        });
+    // 4. Spatial Warp: Push any sprites inside the ball outward to its perimeter
+    for (let i = 0; i < result.layout.length; i++) {
+      const pt = result.layout[i];
+      const dx = pt.x - ballX;
+      const dy = pt.y - ballY;
+      const distSq = dx * dx + dy * dy;
+
+      if (distSq < rSq) {
+        const dist = Math.sqrt(distSq);
+        
+        if (dist === 0) {
+          // Edge case: if a point is dead-center, default to pushing it straight up
+          pt.y = ballY - ballRadius;
+        } else {
+          // Normalize the vector and multiply by the desired radius
+          pt.x = ballX + (dx / dist) * ballRadius;
+          pt.y = ballY + (dy / dist) * ballRadius;
+        }
+        
+        // Flag warped points as UI so the ball area is highly reactive to the cursor
+        pt.isUI = 1; 
       }
     }
+
+    // Make the clickable height at least as tall as the ball so it's easy to grab
+    const clickableHeight = Math.max(basePixelHeight, containerHeight * (this.ballDiameter / 100));
+    
+    // Center the clickable zone over the track
+    const zoneX = baseStartX;
+    const zoneY = baseStartY + (basePixelHeight / 2) - (clickableHeight / 2);
+
+    result.zones.push({
+      x: zoneX,
+      y: zoneY,
+      width: basePixelWidth,
+      height: clickableHeight,
+      actionType: 'slider',
+      id: this.id,
+      value: this.ballPosition
+    });
 
     return result;
   }

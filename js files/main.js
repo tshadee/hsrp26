@@ -78,6 +78,43 @@ export class SpritePool {
     const centerY = rect.height / 2;
 
     zones.forEach(zone => {
+      // --- NEW SLIDER LOGIC ---
+      if (zone.actionType === 'slider') {
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = '0';
+        input.max = '100';
+        input.value = zone.value;
+        input.style.position = 'absolute';
+        input.style.pointerEvents = 'auto';
+        input.style.cursor = 'pointer';
+        input.style.opacity = '0'; // Completely invisible
+        
+        input.style.left = zone.isAbsolute ? `${zone.x}px` : `${centerX + zone.x}px`;
+        input.style.top = zone.isAbsolute ? `${zone.y}px` : `${centerY + zone.y}px`;
+        input.style.width = `${zone.width}px`;
+        input.style.height = `${zone.height}px`;
+
+        // When dragged, broadcast a global event
+        input.addEventListener('input', (e) => {
+           window.dispatchEvent(new CustomEvent('hsrp-slider-drag', { 
+             detail: { id: zone.id, value: parseFloat(e.target.value) } 
+           }));
+        });
+
+        input.addEventListener('change', (e) => {
+           window.dispatchEvent(new CustomEvent('hsrp-slider-drop', { 
+             detail: { id: zone.id, value: parseFloat(e.target.value) } 
+           }));
+        });
+        
+        // Prevent click explosions while dragging the slider
+        input.addEventListener('mousedown', (e) => e.stopPropagation());
+
+        this.overlayContainer.appendChild(input);
+        return; // Skip the standard click-div logic below
+      }
+
       const el = document.createElement('div');
       el.style.position = 'absolute';
       el.style.pointerEvents = 'auto'; 
@@ -360,7 +397,7 @@ export class SpriteGroup {
 }
 
 export class SpriteRectangle {
-  constructor(widthPercent = 100, heightPercent = 100, densityFactor = 1.0) {
+  constructor(widthPercent = 100, heightPercent = 100, densityFactor = 0.6) {
     this.type = 'SpriteRectangle';
     this.pool = null;
     this.group = null;
@@ -373,9 +410,9 @@ export class SpriteRectangle {
       justify: 'center',
       align: 'center',
       layers: 1,                 
-      layerSpacing: 5,           //(in pixels)
+      layerSpacing: 10,           //(in pixels)
       layerDirection: 'outwards', //('inwards' or 'outwards')
-      cornerRadius: 0
+      cornerRadius: 5
     };
   }
 
@@ -412,13 +449,21 @@ export class SpriteRectangle {
 }
 
 export class SpriteSlider extends SpriteRectangle {
-  constructor(widthPercent = 100, heightPercent = 100, densityFactor = 1.0) {
+  constructor(widthPercent = 10 , heightPercent = 1.5, densityFactor = 0.6) {
     super(widthPercent, heightPercent, densityFactor);
     this.type = 'SpriteSlider'; 
     
     // Set defaults for the ball
-    this.config.ballPosition = 50; // Percentage along the width
-    this.config.ballDiameter = 5;  // Percentage of container size
+    this.config.ballPosition = 50; // % of container width
+    this.config.ballDiameter = 3;  // % of container height
+    this.config.cornerRadius = 2;  // %
+    this.config.layers = 1;
+    this.config.id = 'default_slider';
+  }
+
+  setId(stringId) {
+    this.config.id = stringId;
+    return this;
   }
 
   setBallPosition(percent) { 

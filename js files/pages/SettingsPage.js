@@ -1,73 +1,128 @@
-import { SpriteWrite, SpriteGroup , SpriteRectangle } from '../main.js';
+import { SpriteWrite, SpriteGroup, SpriteRectangle, SpriteSlider } from '../main.js';
+
+// Define the limits for all your engine variables
+const PHYSICS_CONFIGS = [
+  { id: 'DEFAULT_SPRITE_SPEED', name: 'SPRITE SPEED', min: 0.005, max: 0.15 },
+  { id: 'DEFAULT_SPRITE_SPEED_VARIANCE', name: 'SPEED VARIANCE', min: 0.0, max: 0.15 },
+  { id: 'SPRITE_DRAG_BASE', name: 'DRAG BASE', min: 0.01, max: 0.3 },
+  { id: 'SPRITE_DRAG_VARIANCE', name: 'DRAG VARIANCE', min: 0.0, max: 0.8 },
+  { id: 'SPRITE_SPAWN_RADIUS_BASE', name: 'SPAWN RADIUS', min: 5, max: 100 },
+  { id: 'SPRITE_SPAWN_RADIUS_VARIANCE', name: 'SPAWN VARIANCE', min: 0, max: 100 },
+  { id: 'SPRITE_CLICK_FORCE', name: 'CLICK FORCE', min: 1, max: 50 },
+  { id: 'SPRITE_CLICK_FORCE_RADIUS', name: 'CLICK RADIUS', min: 0.01, max: 0.3 },
+  { id: 'SPRITE_HOVER_RADIUS', name: 'HOVER RADIUS', min: 0.01, max: 0.1 },
+  { id: 'MORPH_TIME_CULLING_MS', name: 'CULLING TIME', min: 1000, max: 5000 },
+  { id: 'K_ALPHA_MULTIPLIER', name: 'ALPHA MULTIPLIER', min: 0.1, max: 2.0 },
+  { id: 'YIELD_BATCH_SIZE_PER_LOOP', name: 'BATCH SIZE', min: 50, max: 1000 }
+];
 
 export class SettingsPage {
-  // We add physicsStore to the constructor so we can broadcast updates
   constructor(container, heroPool, physicsStore) {
     this.container = container;
     this.heroPool = heroPool;
     this.physicsStore = physicsStore; 
-
-    this.borderBox = new SpriteRectangle(40,60,0.6)
-    .setAnchor(30,50)
-    .setJustify('left')
-    .setAlign('center')
-    .setLayers(2)
-    .setLayerSpacing(10)
-    .setLayerDirection('inwards')
-    .setCornerRadius(5)
-    .attach(this.heroPool);
     
-    this.spriteController = new SpriteWrite(
-      "[i]Engine Settings[/i]", 
-      14
-    )
-    .setAnchor(50, 30)
-    .setJustify('center')
-    .setAlign('center')
-    .setWrap(true)
-    .attach(this.heroPool);
-
-    this.pageTextController = new SpriteWrite("settings", 9, 0.8)
-    .setAnchor(50, 98)
-    .setJustify('center')
-    .setAlign('top')
-    .attach(this.heroPool);
+    // Store references to our dynamic sliders so we can morph them later
+    this.sliderInstances = {};
 
     this.spriteGroup = new SpriteGroup().attach(heroPool);
+
+    // -- Static Decor --
+    this.settingsBorderBox = new SpriteRectangle(35, 80, 0.6)
+      .setAnchor(25, 50).setJustify('center').setAlign('center')
+      .setLayers(2).setLayerSpacing(8).setLayerDirection('inwards')
+      .setCornerRadius(5);
+    
+    this.spriteController = new SpriteWrite("[i]PhysEngine Variables[/i]", 12)
+      .setAnchor(25, 25).setJustify('center').setAlign('center').setWrap(true);
+
+    this.sprite2Controller = new SpriteWrite("Get jiggy wid it\nI'll write an explanation\nfor each variable later\n\n[a:0]Back to Home[a]\n\n[a:2]Go to About[a]", 9, 1.0)
+      .setAnchor(25, 35).setJustify('center').setAlign('top').setWrap(true);
+
+    this.pageTextController = new SpriteWrite("settings", 9, 0.8)
+      .setAnchor(50, 98).setJustify('center').setAlign('top');
+
+    this.spriteGroup.add(this.settingsBorderBox, container);
     this.spriteGroup.add(this.spriteController, container);
+    this.spriteGroup.add(this.sprite2Controller, container);
     this.spriteGroup.add(this.pageTextController, container);
-    this.spriteGroup.add(this.borderBox, container);
+
+    // -- Automated Slider Generation --
+    this._buildSliders(container);
+
+    this.onSliderDrag = this.onSliderDrag.bind(this);
+    this.onSliderDrop = this.onSliderDrop.bind(this);
+  }
+
+  _buildSliders(container) {
+    let startY = 15; // Starting Y percentage for the top slider
+    const spacingY = 6; // Percentage gap between each slider
+
+    PHYSICS_CONFIGS.forEach((config) => {
+      // Grab current value from store, or default to halfway
+      const currentValue = this.physicsStore.config[config.id] ?? ((config.min + config.max) / 2);
+      const currentPercent = this._mapToPercent(currentValue, config.max, config.min);
+
+      // 1. Build the Label
+      const label = new SpriteWrite(config.name.toLowerCase(), 6)
+        .setAnchor(45, startY)
+        .setJustify('left')
+        .setAlign('center');
+
+      // 2. Build the Slider Track
+      const slider = new SpriteSlider(30, 1.2, 0.6)
+        .setId(config.id)
+        .setAnchor(88, startY) // Aligned to the right side of the screen
+        .setJustify('right')
+        .setAlign('center')
+        .setBallPosition(currentPercent);
+
+      // Save to instance dictionary and add to group
+      this.sliderInstances[config.id] = slider;
+      this.spriteGroup.add(label, container);
+      this.spriteGroup.add(slider, container);
+
+      startY += spacingY;
+    });
+  }
+
+  _mapToPercent(val, max, min) { return ((val - min) / (max - min)) * 100; }
+  _mapToPhysics(percent, max, min) { return min + (percent / 100) * (max - min); }
+
+  _getConfigById(id) {
+    return PHYSICS_CONFIGS.find(c => c.id === id);
+  }
+
+  // Fires continuously while moving the mouse. Updates engine instantly.
+  onSliderDrag(e) {
+    const config = this._getConfigById(e.detail.id);
+    if (!config) return;
+    
+    const sliderPercent = e.detail.value;
+    const actualPhysicsValue = this._mapToPhysics(sliderPercent, config.max, config.min);
+    
+    this.physicsStore.update(config.id, actualPhysicsValue);
+  }
+
+  // Fires ONLY when the mouse is released. Triggers the heavy sprite morph.
+  onSliderDrop(e) {
+    const config = this._getConfigById(e.detail.id);
+    if (!config || !this.sliderInstances[config.id]) return;
+    
+    const sliderPercent = e.detail.value;
+    this.sliderInstances[config.id].morphValueTo(sliderPercent);
   }
 
   async mount() {
-    // Inject the slider UI
-    this.container.innerHTML = `
-      <div class="page-settings" style="position: absolute; top: 55%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white; font-family: monospace; pointer-events: auto;">
-        <label for="speed-slider" style="display: block; margin-bottom: 10px;">Sprite Speed</label>
-        <input type="range" id="speed-slider" min="0.005" max="0.15" step="0.001" style="width: 200px;">
-        <div id="speed-value" style="margin-top: 10px;"></div>
-      </div>
-    `;
-
-    // Hook up the physics store
-    const slider = document.getElementById('speed-slider');
-    const display = document.getElementById('speed-value');
-    
-    // Set initial slider value from the store
-    const currentSpeed = this.physicsStore.getConfig().DEFAULT_SPRITE_SPEED;
-    slider.value = currentSpeed;
-    display.innerText = currentSpeed;
-
-    // Broadcast changes on drag
-    slider.addEventListener('input', (e) => {
-      const val = parseFloat(e.target.value);
-      display.innerText = val;
-      this.physicsStore.update('DEFAULT_SPRITE_SPEED', val);
-    });
+    this.container.innerHTML = ``; 
+    window.addEventListener('hsrp-slider-drag', this.onSliderDrag);
+    window.addEventListener('hsrp-slider-drop', this.onSliderDrop);
   }
 
   async unmount() {
     this.container.innerHTML = '';
+    window.removeEventListener('hsrp-slider-drag', this.onSliderDrag);
+    window.removeEventListener('hsrp-slider-drop', this.onSliderDrop);
   }
 
   getSpriteConfig() {

@@ -83,7 +83,6 @@
     const bar = document.getElementById('gatekeeper-bar');
     const text = document.getElementById('gatekeeper-text');
     
-    // Open the exact same cache the Web Worker uses
     const cache = await caches.open('hsrp-shapes-v1');
     let loaded = 0;
     const total = urlsToFetch.length;
@@ -123,10 +122,10 @@
     }, 500);
   }
 
-  // Start the preloader immediately
+  // Start the preloader 
   preloadAssets();
 
-  // ─── MAIN ENGINE (Only runs when called) ────────────────────────
+  // ─── MAIN ENGINE ────────────────────────
 
   async function startWebsite() {
     const { SpritePool , SpriteWrite , SpriteImage , SpriteGroup } = await import('./js files/main.js');
@@ -141,7 +140,7 @@
     // ── Hero Pool ──
     const heroMount = document.getElementById('hero-mount');
     const heroPool = new SpritePool(heroMount, { 
-        maxSprites: 30000, 
+        maxSprites: 50000, 
         spriteSize: 2, 
         interactionType: 'hero',
         fullScreen: false 
@@ -153,10 +152,9 @@
     const navLogoMount = document.getElementById('pool-hsrp-logo');
     const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 2500, spriteSize: 1.2});
     const navLogoText = new SpriteWrite("hsrp26", 8).attach(navLogoPool);
-    const navLogoImage = new SpriteImage("hsrp-logo-reduced-inverted", 50).attach(navLogoPool); // Set scale to 100px or whatever fits your nav
+    const navLogoImage = new SpriteImage("hsrp-logo-reduced-inverted", 50).attach(navLogoPool); 
 
-    // ── Single UI Group ── (Replaces Nav 1, 2, 3 and both Arrows)
-    // We attach this pool to the body because it spans across multiple DOM regions
+    // ── UI Group ── 
     const uiPool = new SpritePool(document.body, { maxSprites: 2500, spriteSize: 1.2, fullScreen: true });
     const uiGroup = new SpriteGroup().attach(uiPool);
 
@@ -166,7 +164,6 @@
     const arrowLeft = new SpriteWrite("[b]<[/b]", 15);
     const arrowRight = new SpriteWrite("[b]>[/b]", 15);
 
-    // Mount them to their respective visual origins
     uiGroup.add(navText1, document.getElementById('pool-nav-1'));
     uiGroup.add(navText2, document.getElementById('pool-nav-2'));
     uiGroup.add(navText3, document.getElementById('pool-nav-3'));
@@ -183,9 +180,6 @@
     const navPoolTimeText = new SpriteWrite("00:00:00 am", 8).attach(navPoolTime);
 
     // Initial Mutations
-    
-  
-
     setTimeout(async () => {
       await uiGroup.refresh();
       await navPoolTime.mutateTo(navPoolTimeText);
@@ -261,7 +255,6 @@
         router.prev();
       });
 
-      // Wire up the top nav buttons to jump to specific pages
       document.getElementById('pool-nav-1').addEventListener('click', (e) => {
         uiPool.explodeAt(e.clientX, e.clientY);
         router.navigateTo(0); // Jumps to HomePage
