@@ -20,7 +20,7 @@ export class HomePage {
     .setAnchor(50,75)
     .setJustify('center')
     .setAlign('center');
-    this.spriteImage = new SpriteImage("hsrp-logo", 300, 1.0, true);
+    this.spriteImage = new SpriteImage("hsrp-logo", 300, 0.5, true);
     this.pageTextController = new SpriteWrite("home", 9, 0.8)
       .setAnchor(50, 95)
       .setJustify('center')

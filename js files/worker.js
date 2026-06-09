@@ -23,7 +23,7 @@ let SPRITE_SHEDDING_THRESHOLD = 0.125;
 
 //below should not be exposed to user for obvious reasons
 
-const MAX_SPRITES = 65000; // TODO: put in debug menu or else someone's PC WILL explode
+const MAX_SPRITES = 100000; // TODO: put in debug menu or else someone's PC WILL explode
 const STRIDE = 19; // floats per sprite
 
 // Offsets mapping 

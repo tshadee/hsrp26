@@ -34,7 +34,7 @@ export class SettingsPage {
     this.spriteController = new SpriteWrite("[i]PhysEngine Variables[/i]", 12)
       .setAnchor(25, 25).setJustify('center').setAlign('center').setWrap(true);
 
-    this.sprite2Controller = new SpriteWrite("Get jiggy wid it\nI'll write an explanation\nfor each variable later\n\n[a:0]Back to Home[a]\n\n[a:2]Go to About[a]", 9, 1.0)
+    this.sprite2Controller = new SpriteWrite("Get jiggy wid it\n\nThe logo has been reduced\nto 50% density\nMigrating the\nengine to WebGL\n\n[a:0]Back to Home[a]\n\n[a:2]Go to About[a]", 9, 1.0)
       .setAnchor(25, 35).setJustify('center').setAlign('top').setWrap(true);
 
     this.pageTextController = new SpriteWrite("settings", 9, 0.8)
