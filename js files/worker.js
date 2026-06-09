@@ -18,10 +18,12 @@ let K_ALPHA_MULTIPLIER = 0.85;
 
 let YIELD_BATCH_SIZE_PER_FRAME = 333;
 
+let SPRITE_SHEDDING_THRESHOLD = 0.125;
+
 
 //below should not be exposed to user for obvious reasons
 
-const MAX_SPRITES = 50000; // TODO: put in debug menu or else someone's PC WILL explode
+const MAX_SPRITES = 65000; // TODO: put in debug menu or else someone's PC WILL explode
 const STRIDE = 19; // floats per sprite
 
 // Offsets mapping 
@@ -33,6 +35,12 @@ const DYING = 12, SHED = 13;       // 0 for false, 1 for true
 const EVX = 14, EVY = 15;          // Expel Velocity
 const CURL_DIR = 16, CURL_CW = 17;
 const IS_UI = 18;
+
+
+//TODO: moving shader source to physengine.glsl
+
+const shader_vertex_source_path = './physengine.vert.glsl'
+const shader_fragment_source_path = './physengine.frag.glsl'
 
 const vsSource = `
   attribute vec2 a_position;
@@ -146,6 +154,39 @@ class ShapeCache {
     // Fire all fetches concurrently
     await Promise.all(fetchPromises);
     console.log("All letter sprites cached and ready.");
+  }
+}
+
+class ShaderLoader {
+  static async load(vertPath, fragPath) {
+    const cacheStorage = await caches.open('hsrp-shaders-v1');
+    const sources = {};
+
+    const fetchShader = async (url, type) => {
+      let response = await cacheStorage.match(url);
+      
+      if (!response) {
+        try {
+          response = await fetch(url);
+          if (response.ok) {
+            await cacheStorage.put(url, response.clone());
+          } else {
+            throw new Error(`Failed to fetch ${url}`);
+          }
+        } catch (e) {
+          console.error(`Network fail for shader: ${url}`, e);
+          return null;
+        }
+      }
+      sources[type] = await response.text();
+    };
+
+    await Promise.all([
+      fetchShader(vertPath, 'vertex'),
+      fetchShader(fragPath, 'fragment')
+    ]);
+
+    return sources;
   }
 }
 
@@ -496,12 +537,11 @@ export class SpritePool {
         this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1, pt.isUI ?? 0);
       } else {
         // No text targets left within 150px. Decimate and dissolve.
-        let randomTarget = remainingCount > 0 
-            ? this.remainingTargets[Math.floor(Math.random() * remainingCount)]
-            : (targetCount > 0 ? newLayout[Math.floor(Math.random() * targetCount)] : { tx: this.layoutCenterX, ty: this.layoutCenterY, a: 0 });
-            
-        this.setSpriteTarget(idx, randomTarget.tx, randomTarget.ty, 0, randomTarget.isUI ?? 0); 
-        this.data[idx + SHED] = 0.1 + Math.random() * 0.2; 
+        const driftAngle = Math.random() * Math.PI * 2;
+        const driftRadius = 80 + Math.random() * 80;
+        
+        this.setSpriteTarget(idx, sx + Math.cos(driftAngle) * driftRadius, sy + Math.sin(driftAngle) * driftRadius, 0, 0); 
+        this.data[idx + SHED] = SPRITE_SHEDDING_THRESHOLD + Math.random() * SPRITE_SHEDDING_THRESHOLD * 2;
       }
     }
 
@@ -543,7 +583,7 @@ export class SpritePool {
     
     for (let i = 0; i < this.maxSprites; i++) {
       let idx = i * STRIDE;
-      if (this.interactionType !== 'ui' && this.data[idx + IS_UI] !== 1) continue;
+      if (this.data[idx + IS_UI] !== 1) continue;
       if (this.data[idx + A] === 0 || this.data[idx + DYING] === 1) continue;
 
       const dx = this.data[idx + X] - px;
@@ -601,10 +641,9 @@ export class SpritePool {
         data[idx + DYING] = 1;
         data[idx + TA] = 0; // Wipe the target alpha so it knows to stay dead
         
-        const vx = data[idx + X] - data[idx + SX];
-        const vy = data[idx + Y] - data[idx + SY];
-        const angle = Math.atan2(vy, vx) + (Math.random() - 0.5) * 2;
-        const burstForce = 4 + Math.random() * 6;
+        // Pure 360-degree random outward burst
+        const angle = Math.random() * Math.PI * 2;
+        const burstForce = 2 + Math.random() * 5; // Slightly gentler for a dust-like dissipation
         
         data[idx + EVX] = Math.cos(angle) * burstForce;
         data[idx + EVY] = Math.sin(angle) * burstForce;
@@ -620,7 +659,7 @@ export class SpritePool {
         data[idx + X] += data[idx + EVX] * timeScale;
         data[idx + Y] += data[idx + EVY] * timeScale;
         
-        const decayBase = 1 - 0.02;
+        const decayBase = 1 - 0.01;
         const deathDecay = 1 - Math.exp(Math.log(decayBase) * timeScale); 
         data[idx + A] += (0 - data[idx + A]) * deathDecay;
         
@@ -630,8 +669,9 @@ export class SpritePool {
         
         data[idx + X] += -data[idx + CURL_CW] * globalDy * swerveStrength;
         data[idx + Y] += data[idx + CURL_CW] * globalDx * swerveStrength;
+      }
 
-      } else {
+       else {
         // --- ALIVE STATE ---
         const timeSinceMorph = timestamp - this.lastMorphTime;
         const canSleep = timeSinceMorph > MORPH_TIME_CULLING_MS;
@@ -653,7 +693,7 @@ export class SpritePool {
           let hoverOffsetX = 0;
           let hoverOffsetY = 0;
 
-          if ((this.interactionType === 'ui' || data[idx + IS_UI] === 1) && pDistSq < hoverRadiusSq) {
+          if ( data[idx + IS_UI] === 1 && pDistSq < hoverRadiusSq) {
             const pDist = Math.sqrt(pDistSq);
             const fluctuation = 0.5 + Math.sin(timestamp * 0.005 + i) * 1.0;
             const force = (1 - pDist / hoverRadius) * 20 * fluctuation;
@@ -802,6 +842,7 @@ export class SpriteWrite extends LayoutController {
     this.pixelMultiplier = config.pixelMultiplier; 
     this.hsRatio = config.hsRatio; 
     this.vsRatio = config.vsRatio;
+    this.isUI = config.isUI || 0;
   }
 
   setFontSize(size) {
@@ -1080,7 +1121,7 @@ export class SpriteWrite extends LayoutController {
           }
 
           // Flag for the physics engine
-          const isLinkUI = token.linkType ? 1 : 0; 
+          const isLinkUI = (token.linkType || this.isUI === 1) ? 1 : 0;
 
           for (const pt of spriteData) {
             let px = pt.x;
@@ -1451,6 +1492,7 @@ self.onmessage = async (e) => {
       if (cfg.MORPH_TIME_CULLING_MS !== undefined) MORPH_TIME_CULLING_MS = cfg.MORPH_TIME_CULLING_MS;
       if (cfg.K_ALPHA_MULTIPLIER !== undefined) K_ALPHA_MULTIPLIER = cfg.K_ALPHA_MULTIPLIER;
       if (cfg.YIELD_BATCH_SIZE_PER_FRAME !== undefined) YIELD_BATCH_SIZE_PER_FRAME = cfg.YIELD_BATCH_SIZE_PER_FRAME;
+      if (cfg.SPRITE_SHEDDING_THRESHOLD !== undefined) SPRITE_SHEDDING_THRESHOLD = cfg.SPRITE_SHEDDING_THRESHOLD;
       }
       break;
   }

@@ -13,7 +13,8 @@ const PHYSICS_CONFIGS = [
   { id: 'SPRITE_HOVER_RADIUS', name: 'HOVER RADIUS', min: 0.01, max: 0.1 },
   { id: 'MORPH_TIME_CULLING_MS', name: 'CULLING TIME', min: 1000, max: 5000 },
   { id: 'K_ALPHA_MULTIPLIER', name: 'ALPHA MULTIPLIER', min: 0.1, max: 2.0 },
-  { id: 'YIELD_BATCH_SIZE_PER_FRAME', name: 'BATCH SIZE', min: 50, max: 1000 }
+  { id: 'YIELD_BATCH_SIZE_PER_FRAME', name: 'BATCH SIZE', min: 50, max: 1000 },
+  { id: 'SPRITE_SHEDDING_THRESHOLD', name: 'SHED THRESHOLD', min: 0.1, max: 0.3 }
 ];
 
 export class SettingsPage {
@@ -37,7 +38,7 @@ export class SettingsPage {
       .setAnchor(25, 35).setJustify('center').setAlign('top').setWrap(true);
 
     this.pageTextController = new SpriteWrite("settings", 9, 0.8)
-      .setAnchor(50, 98).setJustify('center').setAlign('top');
+      .setAnchor(50, 95).setJustify('center').setAlign('top');
 
     this.spriteGroup.add(this.settingsBorderBox, container);
     this.spriteGroup.add(this.spriteController, container);

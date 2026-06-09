@@ -111,7 +111,7 @@ body {
 
 @font-face {
     font-family: 'NVMono';
-    src: url('./fonts/NVMono.otf') format('otf');
+    src: url('./fonts/NVMono.otf') format('opentype');
     font-weight: normal;
     font-style: normal;
     font-display: swap;

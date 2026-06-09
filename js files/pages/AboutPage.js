@@ -12,14 +12,12 @@ export class AboutPage {
     .setAnchor(50, 50)
     .setJustify('center')
     .setAlign('center')
-    .setWrap(true)
-    .attach(this.heroPool);
+    .setWrap(true);
 
     this.pageTextController = new SpriteWrite("about", 9, 0.8)
-    .setAnchor(50,98)
+    .setAnchor(50,95)
     .setJustify('center')
-    .setAlign('top')
-    .attach(this.heroPool);
+    .setAlign('top');
 
     this.spriteGroup = new SpriteGroup().attach(heroPool);
     this.spriteGroup.add(this.spriteController, container);

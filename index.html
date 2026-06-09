@@ -129,7 +129,7 @@
   // ─── MAIN ENGINE ────────────────────────
 
   async function startWebsite() {
-    const { SpritePool , SpriteWrite , SpriteImage , SpriteGroup } = await import('./js files/main.js');
+    const { SpritePool, SpriteWrite, SpriteImage, SpriteGroup } = await import('./js files/main.js');
     const { PhysicsStore } = await import('./js files/PhysicsStore.js');
     const { Router } = await import('./js files/router.js');
     const { HomePage } = await import('./js files/pages/HomePage.js');
@@ -138,69 +138,54 @@
 
     const physicsStore = new PhysicsStore();
 
-    // ── Hero Pool ──
-    const heroMount = document.getElementById('hero-mount');
-    const heroPool = new SpritePool(heroMount, { 
-        maxSprites: 50000, 
-        spriteSize: 2, 
-        interactionType: 'hero',
-        fullScreen: false 
-    });
-    const heroPoolText = new SpriteWrite("starting...", 14).attach(heroPool);
-    physicsStore.register(heroPool);
-
-    // ── Logo Pool ──
-    const navLogoMount = document.getElementById('pool-hsrp-logo');
-    const navLogoPool = new SpritePool(navLogoMount, { maxSprites: 2500, spriteSize: 1.2});
-    const navLogoText = new SpriteWrite("hsrp26", 8).attach(navLogoPool);
-    const navLogoImage = new SpriteImage("hsrp-logo-reduced-inverted", 50).attach(navLogoPool); 
-
-    // ── UI Group ── 
-    const uiPool = new SpritePool(document.body, { maxSprites: 2500, spriteSize: 1.2, fullScreen: true });
-    const uiGroup = new SpriteGroup().attach(uiPool);
-
-    const navText1 = new SpriteWrite("home", 8);
-    const navText2 = new SpriteWrite("settings", 8);
-    const navText3 = new SpriteWrite("about", 8);
-    const arrowLeft = new SpriteWrite("[b]<[/b]", 15);
-    const arrowRight = new SpriteWrite("[b]>[/b]", 15);
-
-    uiGroup.add(navText1, document.getElementById('pool-nav-1'));
-    uiGroup.add(navText2, document.getElementById('pool-nav-2'));
-    uiGroup.add(navText3, document.getElementById('pool-nav-3'));
-    uiGroup.add(arrowLeft, document.getElementById('hero-left-arrow'));
-    uiGroup.add(arrowRight, document.getElementById('hero-right-arrow'));
-
-    // ── Clock Pool ──
-    const navMountTime = document.getElementById('pool-nav-time');
-    const navPoolTime = new SpritePool(navMountTime, { 
-        maxSprites: 1000, 
+    // ── 1. The Master Pool ──
+    const masterPool = new SpritePool(document.body, { 
+        maxSprites: 65000, 
         spriteSize: 1.5, 
-        fullScreen: true
+        fullScreen: true 
     });
-    const navPoolTimeText = new SpriteWrite("00:00:00 am", 8).attach(navPoolTime);
+    physicsStore.register(masterPool);
 
-    // Initial Mutations
+    const masterGroup = new SpriteGroup().attach(masterPool);
+
+    // ── 2. Define Shared Controllers ──
+    const heroText = new SpriteWrite("starting...", 14).setUI(false);
+    const navLogoText = new SpriteWrite("hsrp26", 8).setUI(true);
+    const navLogoImage = new SpriteImage("hsrp-logo-reduced-inverted", 50, 1.0, false); 
+    const navText1 = new SpriteWrite("home", 8).setUI(true);
+    const navText2 = new SpriteWrite("settings", 8).setUI(true);
+    const navText3 = new SpriteWrite("about", 8).setUI(true);
+    const arrowLeft = new SpriteWrite("[b]<[/b]", 15).setUI(true);
+    const arrowRight = new SpriteWrite("[b]>[/b]", 15).setUI(true);
+    const clockText = new SpriteWrite("00:00:00 am", 8).setUI(false);
+
+    // ── 3. Assemble the Master Group ──
+    masterGroup.add(heroText, document.getElementById('page-container'));
+    masterGroup.add(navLogoImage, document.getElementById('pool-hsrp-logo'));
+    masterGroup.add(navText1, document.getElementById('pool-nav-1'));
+    masterGroup.add(navText2, document.getElementById('pool-nav-2'));
+    masterGroup.add(navText3, document.getElementById('pool-nav-3'));
+    masterGroup.add(arrowLeft, document.getElementById('hero-left-arrow'));
+    masterGroup.add(arrowRight, document.getElementById('hero-right-arrow'));
+    masterGroup.add(clockText, document.getElementById('pool-nav-time'));
+
+    // Initial render pipeline
     setTimeout(async () => {
-      await uiGroup.refresh();
-      await navPoolTime.mutateTo(navPoolTimeText);
-      await navLogoPool.mutateTo(navLogoImage);
-      await heroPool.mutateTo(heroPoolText);
+      await masterGroup.refresh();
     }, 150);
 
-    // Auto-recalculate absolute coordinates for the UI group on resize
+    // Recalculate absolute coordinates automatically on resize
     let resizeTimer;
     window.addEventListener('resize', () => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => uiGroup.refresh(), 150);
+      resizeTimer = setTimeout(() => masterGroup.refresh(), 150);
     });
 
+    // ── 4. Layout Updaters ──
     let lastSecondUpdated = -1;
-
     function updateClock() {
       const now = new Date();
       const s = now.getSeconds();
-
       if (s % 5 === 0 && s !== lastSecondUpdated) {
         lastSecondUpdated = s;
         let h = now.getHours();
@@ -208,9 +193,8 @@
         h = h % 12 || 12;
         const m = String(now.getMinutes()).padStart(2, '0');
         const sec = String(s).padStart(2, '0');
-        const timeString = `${h}:${m}:${sec} ${ampm}`;
         
-        navPoolTimeText.morphTo(timeString);
+        clockText.morphTo(`${h}:${m}:${sec} ${ampm}`);
       }
     }
     setInterval(updateClock, 200);
@@ -223,10 +207,11 @@
         let timeoutTime = 5000 + Math.random() * 5000;
         setTimeout(() => {
           if (index !== 2) {
+            masterGroup.replace(document.getElementById('pool-hsrp-logo'), navLogoText);
             navLogoText.morphTo(logoTexts[index]);
           } else {
-            // Master mutation to an Image Map
-            navLogoPool.mutateTo(navLogoImage);
+            masterGroup.replace(document.getElementById('pool-hsrp-logo'), navLogoImage);
+            masterGroup.refresh(); 
           }
           index = (index + 1) % logoTexts.length;
           recursionLogo();
@@ -236,40 +221,51 @@
     }
     updateLogo();
 
-    // ── Routing & UI Wiring ──
+    // ── 5. Routing & UI Wiring ──
     const contentContainer = document.getElementById('page-container');
-    const router = new Router(heroPool, uiPool);
 
-    // Register pages to router... if there are more, add more. Yeah. It's kinda hard to explain.
-    router.register(new HomePage(contentContainer, heroPool))
-          .register(new SettingsPage(contentContainer, heroPool, physicsStore))
-          .register(new AboutPage(contentContainer, heroPool));
-          //^^ this is a circular array so the router.next() / prev() stuff will just loopdeloop
+    // Bridge intercepts the router's pool requests and slots them into the Master Group
+    const routerBridge = {
+        mutateTo: async (controller) => {
+            // Replaces the existing page group on the container
+            masterGroup.replace(contentContainer, controller);
+            await masterGroup.refresh();
+        },
+        explodeAt: (x, y) => masterPool.explodeAt(x, y),
+        updatePhysics: (cfg) => masterPool.updatePhysics(cfg),
+        mountEl: contentContainer 
+    };
+
+    const router = new Router(routerBridge, masterPool);
+
+    router.register(new HomePage(contentContainer, routerBridge))
+          .register(new SettingsPage(contentContainer, routerBridge, physicsStore))
+          .register(new AboutPage(contentContainer, routerBridge));
 
     setTimeout(() => {
       document.getElementById('hero-right-arrow').addEventListener('click', (e) => {
-        uiPool.explodeAt(e.clientX, e.clientY);
+        masterPool.explodeAt(e.clientX, e.clientY);
         router.next(); 
       });
 
       document.getElementById('hero-left-arrow').addEventListener('click', (e) => {
-        uiPool.explodeAt(e.clientX, e.clientY);
+        masterPool.explodeAt(e.clientX, e.clientY);
         router.prev();
       });
 
       document.getElementById('pool-nav-1').addEventListener('click', (e) => {
-        uiPool.explodeAt(e.clientX, e.clientY);
-        router.navigateTo(0); // Jumps to HomePage
+        masterPool.explodeAt(e.clientX, e.clientY);
+        router.navigateTo(0);
       });
 
       document.getElementById('pool-nav-2').addEventListener('click', (e) => {
-        uiPool.explodeAt(e.clientX, e.clientY);
-        router.navigateTo(1); // Jumps to SettingsPage
+        masterPool.explodeAt(e.clientX, e.clientY);
+        router.navigateTo(1);
       });
 
       document.getElementById('pool-nav-3').addEventListener('click', (e) => {
-        uiPool.explodeAt(e.clientX, e.clientY);
-        router.navigateTo(2); // Jumps to AboutPage
+        masterPool.explodeAt(e.clientX, e.clientY);
+        router.navigateTo(2); 
       });
       router.navigateTo(0);
     }, 2000);

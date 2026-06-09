@@ -220,7 +220,7 @@ export class SpritePool {
 export class SpriteWrite {
   constructor(text, fontSize = 16, densityFactor = 1.0) {
     this.type = 'SpriteWrite'; 
-    this.pool = null;
+    this.parentGroup = null;
     
     this.config = {
       text: text,
@@ -236,12 +236,8 @@ export class SpriteWrite {
     };
   }
 
-  attach(parent) {
-    if (parent.type === 'SpriteGroup') {
-      this.group = parent;
-    } else {
-      this.pool = parent;
-    }
+  setUI(isUI) {
+    this.config.isUI = isUI ? 1 : 0;
     return this;
   }
 
@@ -273,13 +269,7 @@ export class SpriteWrite {
     if (this.config.text === newText && !forceFlicker) return this;
     this.config.text = newText;
     
-    if (this.group) {
-      await this.group.refresh();
-    } else if (this.pool) {
-      await this.pool.mutateTo(this);
-    } else {
-      console.warn("SpriteWrite morphed, but it isn't attached.");
-    }
+    if (this.parentGroup) await this.parentGroup.refresh();
     return this;
   }
 }
@@ -287,7 +277,7 @@ export class SpriteWrite {
 export class SpriteImage {
   constructor(filename, scale = 300, densityFactor = 1.0, isMouseAffected=false, targetScale = 200) {
     this.type = 'SpriteImage'; 
-    this.pool = null;
+    this.parentGroup = null;
     
     this.config = {
       filename: filename,
@@ -299,14 +289,6 @@ export class SpriteImage {
     };
   }
 
-  attach(parent) {
-    if (parent.type === 'SpriteGroup') {
-      this.group = parent;
-    } else {
-      this.pool = parent;
-    }
-    return this;
-  }
   setScale(scale) {
     this.config.scale = scale;
     return this;
@@ -325,33 +307,19 @@ export class SpriteImage {
     if (this.config.text === newText && !forceFlicker) return this;
     this.config.text = newText;
     
-    if (this.group) {
-      await this.group.refresh();
-    } else if (this.pool) {
-      await this.pool.mutateTo(this);
-    } else {
-      console.warn("SpriteWrite morphed, but it isn't attached.");
-    }
+    if (this.parentGroup) await this.parentGroup.refresh();
     return this;
   }
 }
+
+
 
 export class SpriteGroup {
   constructor() {
     this.type = 'SpriteGroup';
     this.pool = null;
+    this.parentGroup = null; // Explicitly track parent groups for nesting
     this.children = [];
-  }
-
-  attach(pool) {
-    this.pool = pool;
-    return this;
-  }
-
-  add(layoutController, mountEl, active = true) {
-    layoutController.attach(this);
-    this.children.push({ controller: layoutController, mountEl , active});
-    return this;
   }
 
   setChildActive(layoutController, isActive) {
@@ -362,35 +330,76 @@ export class SpriteGroup {
     return this;
   }
 
-  getConfig() {
-    // Determine the pool's bounding box and screen status
-    const poolRect = this.pool ? this.pool.mountEl.getBoundingClientRect() : { left: 0, top: 0 };
-    const isFullScreen = this.pool ? this.pool.fullScreen : true;
+  attach(pool) {
+    this.pool = pool;
+    return this;
+  }
 
-    return {
-      children: this.children.map(c => {
-        const rect = c.mountEl.getBoundingClientRect();
-        return {
+  add(controller, mountEl, active = true) {
+    controller.parentGroup = this;
+    this.children.push({ controller, mountEl, active });
+    return this;
+  }
+
+  // Swap out a controller targeting a specific DOM element (perfect for logos/pages)
+  replace(mountEl, newController, active = true) {
+    newController.parentGroup = this;
+    if (mountEl) {
+        const index = this.children.findIndex(c => c.mountEl === mountEl);
+        if (index !== -1) {
+            this.children[index] = { controller: newController, mountEl, active };
+            return this;
+        }
+    }
+    this.children.push({ controller: newController, mountEl, active });
+    return this;
+  }
+
+  getConfig() {
+    // Flatten the hierarchy so the Worker only deals with a 1D array of absolute positions
+    const flatChildren = [];
+
+    const processChild = (c) => {
+      if (c.active === false) return;
+      
+      if (c.controller.type === 'SpriteGroup') {
+        // Recursively dig into nested groups
+        c.controller.children.forEach(processChild);
+      } else {
+        // Standard controller: Calculate absolute screen center
+        let offsetX = 0;
+        let offsetY = 0;
+        
+        if (c.mountEl) {
+          const rect = c.mountEl.getBoundingClientRect();
+          offsetX = rect.left + rect.width / 2;
+          offsetY = rect.top + rect.height / 2;
+        }
+        
+        flatChildren.push({
           type: c.controller.type,
           config: c.controller.getConfig(),
-          offsetX: isFullScreen ? rect.left + rect.width / 2 : (rect.left - poolRect.left) + rect.width / 2,
-          offsetY: isFullScreen ? rect.top + rect.height / 2 : (rect.top - poolRect.top) + rect.height / 2,
-          active: c.active
-        };
-      })
+          offsetX: offsetX,
+          offsetY: offsetY,
+          active: true
+        });
+      }
     };
+
+    this.children.forEach(processChild);
+    return { children: flatChildren };
   }
 
   async refresh() {
     if (this.pool) await this.pool.mutateTo(this);
+    else if (this.parentGroup) await this.parentGroup.refresh();
   }
 }
 
 export class SpriteRectangle {
   constructor(widthPercent = 100, heightPercent = 100, densityFactor = 0.6) {
     this.type = 'SpriteRectangle';
-    this.pool = null;
-    this.group = null;
+    this.parentGroup = null;
     
     this.config = {
       width: widthPercent,
@@ -404,15 +413,6 @@ export class SpriteRectangle {
       layerDirection: 'outwards', //('inwards' or 'outwards')
       cornerRadius: 5
     };
-  }
-
-  attach(parent) {
-    if (parent.type === 'SpriteGroup') {
-      this.group = parent;
-    } else {
-      this.pool = parent;
-    }
-    return this;
   }
 
   setWidth(percent) { this.config.width = percent; return this; }
@@ -432,8 +432,7 @@ export class SpriteRectangle {
     this.config.width = newWidth;
     this.config.height = newHeight;
     
-    if (this.group) await this.group.refresh();
-    else if (this.pool) await this.pool.mutateTo(this);
+    if (this.parentGroup) await this.parentGroup.refresh();
     return this;
   }
 }
@@ -468,8 +467,7 @@ export class SpriteSlider extends SpriteRectangle {
 
   async morphValueTo(newValue) {
     this.setBallPosition(newValue);
-    if (this.group) await this.group.refresh();
-    else if (this.pool) await this.pool.mutateTo(this);
+    if (this.parentGroup) await this.parentGroup.refresh();
     return this;
   }
 }
