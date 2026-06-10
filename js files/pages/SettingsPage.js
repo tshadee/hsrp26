@@ -31,7 +31,7 @@ export class SettingsPage {
       .setLayers(2).setLayerSpacing(8).setLayerDirection('inwards')
       .setCornerRadius(5);
     
-    this.spriteController = new SpriteWrite("[i]PhysEngine Variables[/i]", 12)
+    this.spriteController = new SpriteWrite("[i]PhysEngine Settings[/i]", 12)
       .setAnchor(25, 25).setJustify('center').setAlign('center').setWrap(true);
 
     this.sprite2Controller = new SpriteWrite("Get jiggy wid it\n\nThe logo has been reduced\nto 50% density\nMigrating the\nengine to WebGL\n\n[a:0]Back to Home[a]\n\n[a:2]Go to About[a]", 9, 1.0)
