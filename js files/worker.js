@@ -185,13 +185,24 @@ export class SpritePool {
     this.canvas = canvas; 
     this.spriteSize = options.spriteSize ?? 3;
     this.maxSprites = options.maxSprites ?? 200000;
-    
-    // 21 Floats per sprite * 4 bytes = 84 bytes per sprite.
-    // 1,000,000 sprites = ~91.5 MB.
-    this.stride = 24;
-    this.data = new Float32Array(this.maxSprites * this.stride);
+    this.mutateId = 0;
     this.activeSprites = 0; 
     this.currentLayout = [];
+
+    // CPU ECS Tracking Arrays
+    this.activeHashes = new Float64Array(this.maxSprites);
+    this.activeIndices = new Int32Array(this.maxSprites);
+    this.deadIndices = new Int32Array(this.maxSprites);
+    this.freeIndices = new Int32Array(this.maxSprites);
+    this.remainingTargets = [];
+    
+    const GRID_SIZE = 150 * 150;
+    this.gridHead = new Int32Array(GRID_SIZE);
+    this.gridNext = new Int32Array(this.maxSprites);
+    this.targetClaimed = new Uint8Array(this.maxSprites);
+
+    // A tiny buffer used purely for injecting spawn coordinates into the GPU
+    this.singleSpawnBuffer = new Float32Array(this.gpuStride);
 
     this.gl = this.canvas.getContext('webgl2', { 
         premultipliedAlpha: false,
@@ -230,13 +241,77 @@ export class SpritePool {
     
     this._bindAttributeLocations(this.physicsProgram);
 
-    // Tell WebGL which 'out' variables to capture BEFORE linking
-    const feedbackVaryings = [
-      'out_pos_dying', 'out_target_drag', 'out_vel_speed', 
-      'out_color', 'out_curl_interact', 'out_skip_pad'
-    ];
+    // ==========================================
+    // DATA STRUCTURES
+    // ==========================================
+    // CPU Data: Target (4) + Color (4) = 8 floats per sprite
+    this.cpuStride = 8;
+    this.cpuData = new Float32Array(this.maxSprites * this.cpuStride);
+    
+    // GPU Data: Position (4) + Velocity (4) = 8 floats per sprite
+    this.gpuStride = 8;
+    this.gpuInitialData = new Float32Array(this.maxSprites * this.gpuStride);
+
+    // Initialize GPU data to 0 so they don't spawn at Infinity
+    for (let i = 0; i < this.maxSprites; i++) {
+        const idx = i * this.gpuStride;
+        this.gpuInitialData[idx + 3] = 0.0; // isDying
+        this.gpuInitialData[idx + 7] = 0.00001; // default speed
+    }
+
+    // ==========================================
+    // BUFFERS & VAOs
+    // ==========================================
+    const BYTES = 4;
+    
+    // 1. The CPU Buffer (Static)
+    this.cpuBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cpuBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.cpuData.byteLength, gl.DYNAMIC_DRAW);
+
+    // 2. The GPU Ping-Pong Buffers
+    this.gpuBuffers = [gl.createBuffer(), gl.createBuffer()];
+    for (let i = 0; i < 2; i++) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.gpuBuffers[i]);
+        gl.bufferData(gl.ARRAY_BUFFER, this.gpuInitialData, gl.DYNAMIC_COPY); // Seed initial positions
+    }
+
+    this.vaos = [gl.createVertexArray(), gl.createVertexArray()];
+
+    for (let i = 0; i < 2; i++) {
+        gl.bindVertexArray(this.vaos[i]);
+
+        // A. Bind GPU Buffer to Attribs 0 & 1
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.gpuBuffers[i]);
+        this.gl.enableVertexAttribArray(0); // a_pos_dying
+        this.gl.vertexAttribPointer(0, 4, this.gl.FLOAT, false, this.gpuStride * BYTES, 0);
+        this.gl.enableVertexAttribArray(1); // a_vel_speed
+        this.gl.vertexAttribPointer(1, 4, this.gl.FLOAT, false, this.gpuStride * BYTES, 4 * BYTES);
+
+        // B. Bind CPU Buffer to Attribs 2 & 3
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.cpuBuffer);
+        this.gl.enableVertexAttribArray(2); // a_target_ui
+        this.gl.vertexAttribPointer(2, 4, this.gl.FLOAT, false, this.cpuStride * BYTES, 0);
+        this.gl.enableVertexAttribArray(3); // a_color
+        this.gl.vertexAttribPointer(3, 4, this.gl.FLOAT, false, this.cpuStride * BYTES, 4 * BYTES);
+    }
+    gl.bindVertexArray(null);
+
+    // ==========================================
+    // TRANSFORM FEEDBACK
+    // ==========================================
+    // CRITICAL: We only capture the 2 GPU variables now!
+    const feedbackVaryings = ['out_pos_dying', 'out_vel_speed'];
     gl.transformFeedbackVaryings(this.physicsProgram, feedbackVaryings, gl.INTERLEAVED_ATTRIBS);
-    gl.linkProgram(this.physicsProgram);
+    gl.linkProgram(this.physicsProgram); // Relink AFTER setting varyings!
+
+    this.transformFeedbacks = [gl.createTransformFeedback(), gl.createTransformFeedback()];
+    for (let i = 0; i < 2; i++) {
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.transformFeedbacks[i]);
+        // TF only writes to the GPU buffer
+        gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, this.gpuBuffers[(i + 1) % 2]); 
+    }
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
 
     // ==========================================
     // 4. BUILD RENDER PROGRAM 
@@ -247,43 +322,6 @@ export class SpritePool {
     
     this._bindAttributeLocations(this.renderProgram);
     gl.linkProgram(this.renderProgram);
-
-    // ==========================================
-    // 5. PING-PONG BUFFERS & VAOs
-    // ==========================================
-    // FIX: Initialize buffer data FIRST before touching Transform Feedback binds
-    this.buffers = [gl.createBuffer(), gl.createBuffer()];
-    for (let i = 0; i < 2; i++) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffers[i]);
-        gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
-    }
-    gl.bindBuffer(gl.ARRAY_BUFFER, null);
-
-    // Set up VAOs and map the massive 21-float stride
-    this.vaos = [gl.createVertexArray(), gl.createVertexArray()];
-    const BYTES = 4;
-    const STRIDE_B = this.stride * BYTES;
-
-    for (let i = 0; i < 2; i++) {
-        gl.bindVertexArray(this.vaos[i]);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffers[i]);
-
-        this._enableAttrib(0, 4, STRIDE_B, 0 * BYTES);  // pos_dying
-        this._enableAttrib(1, 4, STRIDE_B, 4 * BYTES);  // target_drag
-        this._enableAttrib(2, 4, STRIDE_B, 8 * BYTES);  // vel_speed
-        this._enableAttrib(3, 4, STRIDE_B, 12 * BYTES); // color
-        this._enableAttrib(4, 4, STRIDE_B, 16 * BYTES); // curl_interact
-        this._enableAttrib(5, 4, STRIDE_B, 20 * BYTES); // skip_pad
-    }
-    gl.bindVertexArray(null);
-
-    // Set up Transform Feedback routing (Buffer A writes to B, B writes to A)
-    this.transformFeedbacks = [gl.createTransformFeedback(), gl.createTransformFeedback()];
-    for (let i = 0; i < 2; i++) {
-        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.transformFeedbacks[i]);
-        gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, this.buffers[(i + 1) % 2]); 
-    }
-    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
 
     this.readIndex = 0; 
     
@@ -299,11 +337,9 @@ export class SpritePool {
   _bindAttributeLocations(program) {
     const gl = this.gl;
     gl.bindAttribLocation(program, 0, "a_pos_dying");
-    gl.bindAttribLocation(program, 1, "a_target_drag");
-    gl.bindAttribLocation(program, 2, "a_vel_speed");
+    gl.bindAttribLocation(program, 1, "a_vel_speed");
+    gl.bindAttribLocation(program, 2, "a_target_ui");
     gl.bindAttribLocation(program, 3, "a_color");
-    gl.bindAttribLocation(program, 4, "a_curl_interact");
-    gl.bindAttribLocation(program, 5, "a_skip_pad");
   }
 
   _enableAttrib(loc, size, stride, offset) {
@@ -350,69 +386,318 @@ export class SpritePool {
 
   async mutateTo(layoutGenerator) {
     const result = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
-    this.currentLayout = result.layout || result;
+    const newLayout = result.layout || result;
     self.postMessage({ type: 'INTERACTIVE_ZONES', zones: result.zones || [] });
-    this._updateBufferData(); 
+
+    this.lastMorphTime = performance.now();
+    const currentMutateId = ++this.mutateId;
+    if (currentMutateId !== this.mutateId) return;
+
+    const offsetX = this.layoutCenterX || 0;
+    const offsetY = this.layoutCenterY || 0;
+
+    let activeCount = 0;
+    let deadCount = 0;
+    let freeCount = 0;
+
+    // 1. Calculate Hashes from `cpuData` (Using Previous Targets as a proxy for position)
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * this.cpuStride;
+      let alpha = this.cpuData[idx + 7]; // Alpha is at offset 7
+      
+      if (alpha > 0.01) {
+        this.activeIndices[activeCount] = i; // Store logical index, not byte offset
+        
+        // Use the previous target (offset 0 and 1) for the spatial hash
+        const tx32 = Math.fround(this.cpuData[idx + 0]);
+        const ty32 = Math.fround(this.cpuData[idx + 1]);
+        const rx = Math.round(tx32) + 10000;
+        const ry = Math.round(ty32) + 10000;
+        
+        this.activeHashes[i] = (ry * 100000) + rx;
+        activeCount++;
+      } else {
+        this.deadIndices[deadCount++] = i;
+      }
+    }
+
+    // 2. Sort Active Sprites & Targets
+    const activeView = this.activeIndices.subarray(0, activeCount);
+    activeView.sort((idxA, idxB) => this.activeHashes[idxA] - this.activeHashes[idxB]);
+
+    const targetCount = newLayout.length;
+    for (let i = 0; i < targetCount; i++) {
+       const pt = newLayout[i];
+       pt.tx = pt.isAbsolute ? pt.x : pt.x + offsetX;
+       pt.ty = pt.isAbsolute ? pt.y : pt.y + offsetY;
+       const rx = Math.round(Math.fround(pt.tx)) + 10000;
+       const ry = Math.round(Math.fround(pt.ty)) + 10000;
+       pt.hash = (ry * 100000) + rx;
+    }
+    newLayout.sort((a, b) => a.hash - b.hash);
+
+    // ==========================================
+    // 3. Two-Pointer EXACT Intersection (The "Locking" Phase)
+    // ==========================================
+    let pA = 0;
+    let pT = 0;
+    this.remainingTargets.length = 0; 
+
+    while (pA < activeCount && pT < targetCount) {
+      let idx = activeView[pA]; // Logical sprite index
+      let hashA = this.activeHashes[idx];
+      let target = newLayout[pT];
+
+      if (hashA === target.hash) {
+        // Perfect match! Just update static properties in the CPU buffer.
+        let cpuIdx = idx * this.cpuStride;
+        this.cpuData[cpuIdx + 3] = target.isUI ? 1.0 : 0.0;
+        this.cpuData[cpuIdx + 7] = target.a ?? 1.0; // Ensure it stays awake
+        
+        pA++; pT++;
+      } else if (hashA < target.hash) {
+        this.freeIndices[freeCount++] = idx; 
+        pA++;
+      } else {
+        this.remainingTargets.push(target);
+        pT++;
+      }
+    }
+
+    while (pA < activeCount) this.freeIndices[freeCount++] = activeView[pA++];
+    while (pT < targetCount) this.remainingTargets.push(newLayout[pT++]);
+
+
+    // ==========================================
+    // 4. ECS SPATIAL HASHING (The "Rearrange" Phase)
+    // ==========================================
+    const remainingCount = this.remainingTargets.length;
+    const CHUNK_SIZE = 64; 
+    const GRID_COLS = 150; 
+    const GRID_ROWS = 150;
+    const OFFSET = 3000; // Shift bounds to avoid negative grid indices
+
+    this.gridHead.fill(-1);
+    this.targetClaimed.fill(0, 0, remainingCount);
+
+    // Populate the flat spatial grid with leftover targets
+    for (let i = 0; i < remainingCount; i++) {
+      const pt = this.remainingTargets[i];
+      const cx = Math.floor((pt.tx + OFFSET) / CHUNK_SIZE);
+      const cy = Math.floor((pt.ty + OFFSET) / CHUNK_SIZE);
+      
+      const safeCx = Math.max(0, Math.min(GRID_COLS - 1, cx));
+      const safeCy = Math.max(0, Math.min(GRID_ROWS - 1, cy));
+      const cell = safeCy * GRID_COLS + safeCx;
+
+      this.gridNext[i] = this.gridHead[cell];
+      this.gridHead[cell] = i;
+    }
+
+
+    // ==========================================
+    // 5. Localized Nearest-Neighbor Assignment
+    // ==========================================
+    // (Ensure YIELD_BATCH_SIZE_PER_FRAME is passed to worker or defined here)
+    const BATCH_SIZE = 333; 
+    const MAX_MORPH_DIST = 150;
+    const MAX_MORPH_DIST_SQ = MAX_MORPH_DIST * MAX_MORPH_DIST;
+    
+    for (let i = 0; i < freeCount; i++) {
+
+      if (i > 0 && i % BATCH_SIZE === 0) {
+        this.lastMorphTime = performance.now(); 
+        await yieldFrame(); 
+      }
+
+      let idx = this.freeIndices[i];
+      let cpuIdx = idx * this.cpuStride;
+      
+      // KEY DIFFERENCE: Use the *previous target* as the spatial anchor
+      // because the CPU no longer knows the mid-flight GPU coordinates!
+      let sx = this.cpuData[cpuIdx + 0]; 
+      let sy = this.cpuData[cpuIdx + 1]; 
+      
+      let cx = Math.floor((sx + OFFSET) / CHUNK_SIZE);
+      let cy = Math.floor((sy + OFFSET) / CHUNK_SIZE);
+
+      let bestTargetIdx = -1;
+      let bestDistSq = MAX_MORPH_DIST_SQ;
+
+      // Scan the immediate 3x3 chunk neighborhood
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          let checkCx = cx + dx;
+          let checkCy = cy + dy;
+          
+          if (checkCx >= 0 && checkCx < GRID_COLS && checkCy >= 0 && checkCy < GRID_ROWS) {
+            let cell = checkCy * GRID_COLS + checkCx;
+            let targetIdx = this.gridHead[cell];
+            
+            // Traverse the linked list in this chunk
+            while (targetIdx !== -1) {
+              if (this.targetClaimed[targetIdx] === 0) {
+                let pt = this.remainingTargets[targetIdx];
+                let distX = sx - pt.tx;
+                let distY = sy - pt.ty;
+                let distSq = distX * distX + distY * distY;
+                
+                if (distSq < bestDistSq) {
+                  bestDistSq = distSq;
+                  bestTargetIdx = targetIdx;
+                }
+              }
+              targetIdx = this.gridNext[targetIdx];
+            }
+          }
+        }
+      }
+
+      if (bestTargetIdx !== -1) {
+        // Claim target in range
+        this.targetClaimed[bestTargetIdx] = 1;
+        const pt = this.remainingTargets[bestTargetIdx];
+        
+        this.cpuData[cpuIdx + 0] = pt.tx;
+        this.cpuData[cpuIdx + 1] = pt.ty;
+        this.cpuData[cpuIdx + 3] = pt.isUI ? 1.0 : 0.0;
+        this.cpuData[cpuIdx + 7] = pt.a ?? 1.0; 
+      } else {
+        // Decimate & Dissolve: No targets left within 150px. 
+        // Assign a random drift target and set alpha to 0 so the GPU puts it to sleep.
+        const driftAngle = Math.random() * Math.PI * 2;
+        const driftRadius = 80 + Math.random() * 80;
+        
+        this.cpuData[cpuIdx + 0] = sx + Math.cos(driftAngle) * driftRadius;
+        this.cpuData[cpuIdx + 1] = sy + Math.sin(driftAngle) * driftRadius;
+        this.cpuData[cpuIdx + 7] = 0.0; // Alpha 0 = Sleep
+      }
+    }
+
+    // HELPER FUNCTION for assigning targets inside the algorithm:
+    const setTarget = (spriteIndex, pt) => {
+        const cpuIdx = spriteIndex * this.cpuStride;
+        this.cpuData[cpuIdx + 0] = pt.tx;
+        this.cpuData[cpuIdx + 1] = pt.ty;
+        this.cpuData[cpuIdx + 3] = pt.isUI ? 1.0 : 0.0;
+        
+        this.cpuData[cpuIdx + 4] = 1.0; // R
+        this.cpuData[cpuIdx + 5] = 1.0; // G
+        this.cpuData[cpuIdx + 6] = 1.0; // B
+        this.cpuData[cpuIdx + 7] = pt.a ?? 1.0; // Alpha > 0 keeps it awake
+    };
+
+    // ==========================================
+    // 6. Localized Spawn Phase
+    // ==========================================
+    const gl = this.gl;
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null); 
+
+    let deadReadIndex = 0; // NEW: Start reading from the lowest available dead index
+
+    for (let i = 0; i < remainingCount; i++) {
+      if (this.targetClaimed[i] === 0 && deadReadIndex < deadCount) {
+          
+          let spriteIdx = this.deadIndices[deadReadIndex++]; 
+          const pt = this.remainingTargets[i];
+          
+          // Set the CPU target
+          setTarget(spriteIdx, pt);
+
+          // Force the CPU buffer to think it's ALREADY at the target, 
+          // so the next morph doesn't drag it from 0,0
+          let cpuIdx = spriteIdx * this.cpuStride;
+          this.cpuData[cpuIdx + 0] = pt.tx;
+          this.cpuData[cpuIdx + 1] = pt.ty;
+
+          // Inject the burst spawn coordinates directly to the GPU
+          const angle = Math.random() * Math.PI * 2;
+          const radius = 20 + Math.random() * 30; 
+          
+          this.singleSpawnBuffer[0] = pt.tx + Math.cos(angle) * radius; 
+          this.singleSpawnBuffer[1] = pt.ty + Math.sin(angle) * radius; 
+          this.singleSpawnBuffer[2] = 0.0; 
+          this.singleSpawnBuffer[3] = 1.0; // We'll use 'w' for current Alpha now!
+          
+          this.singleSpawnBuffer[4] = 0.0; 
+          this.singleSpawnBuffer[5] = 0.0; 
+          this.singleSpawnBuffer[6] = 0.0; 
+          this.singleSpawnBuffer[7] = 0.15; 
+
+          const byteOffset = spriteIdx * this.gpuStride * 4; 
+          
+          for (let b = 0; b < 2; b++) {
+              gl.bindBuffer(gl.ARRAY_BUFFER, this.gpuBuffers[b]);
+              gl.bufferSubData(gl.ARRAY_BUFFER, byteOffset, this.singleSpawnBuffer);
+          }
+      }
+    }
+
+    // ==========================================
+    // 8. Upload the CPU Targets & Calculate True Draw Boundary
+    // ==========================================
+    
+    // Scan backwards to find the absolute highest index currently alive
+    let highestActiveIndex = 0;
+    for (let i = this.maxSprites - 1; i >= 0; i--) {
+        if (this.cpuData[i * this.cpuStride + 7] > 0.01) {
+            highestActiveIndex = i;
+            break;
+        }
+    }
+    
+    // Tell WebGL to draw from 0 up to our highest active memory slot
+    this.activeSprites = highestActiveIndex + 1;
+    
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cpuBuffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cpuData.subarray(0, this.maxSprites * this.cpuStride));
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
+
+
 
   _updateBufferData() {
     const offsetX = this.layoutCenterX || 0;
     const offsetY = this.layoutCenterY || 0;
 
-    this.activeSprites = Math.min(this.currentLayout.length, this.maxSprites);
+    const newSpriteCount = Math.min(this.currentLayout.length, this.maxSprites);
+    const previousSpriteCount = this.activeSprites;
+
+    // We must draw enough sprites to cover the previous layout fading out, 
+    // or the new layout coming in.
+    this.activeSprites = Math.max(previousSpriteCount, newSpriteCount);
 
     for (let i = 0; i < this.activeSprites; i++) {
-      const pt = this.currentLayout[i];
-      const idx = i * this.stride;
-      
-      const targetX = pt.isAbsolute ? pt.x : pt.x + offsetX;
-      const targetY = pt.isAbsolute ? pt.y : pt.y + offsetY;
+      const idx = i * this.cpuStride;
 
-      // 0: pos_dying [x, y, z, isDying]
-      this.data[idx + 0] = targetX;
-      this.data[idx + 1] = targetY;
-      this.data[idx + 2] = 0;
-      this.data[idx + 3] = 0; 
+      if (i < newSpriteCount) {
+        // ACTIVE SPRITES (Generation & Moving)
+        const pt = this.currentLayout[i];
+        const targetX = pt.isAbsolute ? pt.x : pt.x + offsetX;
+        const targetY = pt.isAbsolute ? pt.y : pt.y + offsetY;
 
-      // 4: target_drag [tx, ty, tz, drag]
-      this.data[idx + 4] = targetX;
-      this.data[idx + 5] = targetY;
-      this.data[idx + 6] = 0;
-      this.data[idx + 7] = 0.1; 
+        this.cpuData[idx + 0] = targetX;
+        this.cpuData[idx + 1] = targetY;
+        this.cpuData[idx + 2] = 0.0; // tz
+        this.cpuData[idx + 3] = pt.isUI ? 1.0 : 0.0; // isUI
 
-      // 8: vel_speed [dx, dy, dz, speed]
-      this.data[idx + 8] = 0; 
-      this.data[idx + 9] = 0; 
-      this.data[idx + 10] = 0; 
-      this.data[idx + 11] = 0.15; 
-
-      // 12: color [r, g, b, a]
-      this.data[idx + 12] = 1.0; 
-      this.data[idx + 13] = 1.0; 
-      this.data[idx + 14] = 1.0; 
-      this.data[idx + 15] = pt.a !== undefined ? pt.a : 1.0; 
-
-      // 16: curl_interact [cx, cy, cz, isInteractable]
-      this.data[idx + 16] = 0; 
-      this.data[idx + 17] = 0; 
-      this.data[idx + 18] = 0; 
-      this.data[idx + 19] = pt.isUI ? 1.0 : 0.0; 
-
-      // 20: skip_pad [calcSkip, pad, pad, pad]
-      this.data[idx + 20] = 0; 
-      this.data[idx + 21] = 0; 
-      this.data[idx + 22] = 0; 
-      this.data[idx + 23] = 0; 
+        this.cpuData[idx + 4] = 1.0; // r
+        this.cpuData[idx + 5] = 1.0; // g
+        this.cpuData[idx + 6] = 1.0; // b
+        this.cpuData[idx + 7] = pt.a !== undefined ? pt.a : 1.0; // a
+      } else {
+        // DEAD SPRITES (Decimation)
+        // Keep their target wherever it was, but set alpha to 0 so they sleep
+        this.cpuData[idx + 7] = 0.0; 
+      }
     }
 
+    // Push ONLY the CPU target buffer to the GPU
     const gl = this.gl;
-    const subArray = this.data.subarray(0, this.activeSprites * this.stride);
-
-    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
-    for (let i = 0; i < 2; i++) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffers[i]);
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, subArray);
-    }
+    const subArray = this.cpuData.subarray(0, this.activeSprites * this.cpuStride);
+    
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.cpuBuffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, subArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
@@ -431,7 +716,7 @@ export class SpritePool {
     return shader;
   }
 
-  _renderLoop() {
+  _renderLoop(timestamp) {
     const gl = this.gl;
     if (this.activeSprites === 0) {
         console.log("[renderLoop] No active sprites on the scene");
@@ -439,10 +724,17 @@ export class SpritePool {
         return;
     }
 
+    
+
     const writeIndex = (this.readIndex + 1) % 2;
 
     // --- PASS 1: PHYSICS COMPUTE ---
+    const dt = timestamp - (this.lastTime || timestamp);
+    this.lastTime = timestamp;
+    
     gl.useProgram(this.physicsProgram);
+    const dtLoc = gl.getUniformLocation(this.physicsProgram, "u_deltaTime");
+    gl.uniform1f(dtLoc, dt);
     gl.bindVertexArray(this.vaos[this.readIndex]);
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.transformFeedbacks[this.readIndex]);
 
