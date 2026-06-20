@@ -163,7 +163,40 @@ export class SpritePool {
     this.spriteSize = options.spriteSize ?? 3;
     this.maxSprites = options.maxSprites ?? 100000;
     
-    // Stripped down to bare minimum: X, Y, Alpha
+    /*
+    The main thread should only be aware of (per sprite):
+      tx, ty, tz (target positions)
+      R, G, B, A (target colour and alpha)
+
+    Sprites that have alpha of <0.01 should not be calculated.
+
+    All other params are stored within the shader and GPU. CPU should not have to compute anything.
+    The ideal architecture is that CPU assigns target positions for sprites and GPU
+    does the physics computation to bring those sprites to the position. 
+
+    Will likely need to use GPGPU or PP-VAO techniques
+
+    GPU params:
+
+    Global Params - should be updatable by CPU:
+      > buffer for target positions assigned by CPU - up to 200,000 points
+      > flow redirectors - in additional to sprite maps given by the CPU, there may be 3D models
+        assigned by the CPU to be rendered alongside sprite maps. GPU needs to compute.
+
+
+    Per Sprite Params:
+      Positioning (current): X, Y, Z (fp32)
+      Positioning (target): tx, ty, tz (fp32)
+      Movement: dx, dy, dz (fp16)
+      Colour: R, G, B, A (uint8)
+      SpParams: isDying (bool)
+                drag (fp16)
+                speed (fp16)
+                curl_dir (fp16x3 (could be vec3))
+                isInteractable (bool)
+                calculationSkip (bool)
+    */
+
     this.stride = 3; 
     this.data = new Float32Array(this.maxSprites * this.stride);
     this.activeSprites = 0; 
