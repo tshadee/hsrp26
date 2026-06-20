@@ -1,3 +1,5 @@
+console.log("Worker is working. Yup.");
+
 let DEFAULT_SPRITE_SPEED = 0.15;  
 let DEFAULT_SPRITE_SPEED_VARIANCE = 0.04;
 
@@ -19,22 +21,6 @@ let K_ALPHA_MULTIPLIER = 0.85;
 let YIELD_BATCH_SIZE_PER_FRAME = 333;
 
 let SPRITE_SHEDDING_THRESHOLD = 0.125;
-
-
-//below should not be exposed to user for obvious reasons
-
-const MAX_SPRITES = 100000; // TODO: put in debug menu or else someone's PC WILL explode
-const STRIDE = 19; // floats per sprite
-
-// Offsets mapping 
-const X = 0, Y = 1, A = 2;
-const TX = 3, TY = 4, TA = 5;      // Target
-const SX = 6, SY = 7, SA = 8;      // Start
-const PROG = 9, SPEED = 10, DRAG = 11;
-const DYING = 12, SHED = 13;       // 0 for false, 1 for true
-const EVX = 14, EVY = 15;          // Expel Velocity
-const CURL_DIR = 16, CURL_CW = 17;
-const IS_UI = 18;
 
 function getSeededRandom(seed) {
   return function() {
@@ -113,14 +99,17 @@ class ShapeCache {
 
 const shaderRamCache = new Map();
 
-const shader_vertex_source_path = './physengine.vert.glsl';
-const shader_fragment_source_path = './physengine.frag.glsl';
+const shader_vertex_phys_source_path = './physics.vert.glsl';
+const shader_vertex_render_source_path = './render.vert.glsl';
+const shader_fragment_render_source_path = './render.frag.glsl';
 
 class ShaderCache {
   static async preload() {
     // 1. Bump the version to invalidate the old cache
     const cacheStorage = await caches.open('hsrp-shaders-v3'); 
-    const paths = [shader_vertex_source_path, shader_fragment_source_path];
+    const paths = [ shader_vertex_phys_source_path,
+                    shader_vertex_render_source_path, 
+                    shader_fragment_render_source_path];
 
     const fetchPromises = paths.map(async (url) => {
       if (shaderRamCache.has(url)) return;
@@ -157,101 +146,169 @@ class ShaderCache {
 
 // ─── Global Sprite Pool ──────────────────────────────────────
 
+/*
+The main thread should only be aware of (per sprite):
+  tx, ty, tz (target positions)
+  R, G, B, A (target colour and alpha)
+
+Sprites that have alpha of <0.01 should not be calculated.
+
+All other params are stored within the shader and GPU. CPU should not have to compute anything.
+The ideal architecture is that CPU assigns target positions for sprites and GPU
+does the physics computation to bring those sprites to the position. 
+
+Will likely need to use GPGPU or PP-VAO techniques
+
+GPU params:
+
+Global Params - should be updatable by CPU:
+  > buffer for target positions assigned by CPU - up to 200,000 points
+  > flow redirectors - in additional to sprite maps given by the CPU, there may be 3D models
+    assigned by the CPU to be rendered alongside sprite maps. GPU needs to compute.
+
+
+Per Sprite Params:
+  Positioning (current): X, Y, Z (fp32)
+  Positioning (target): tx, ty, tz (fp32)
+  Movement: dx, dy, dz (fp16)
+  Colour: R, G, B, A (uint8)
+  SpParams: isDying (bool)
+            drag (fp16)
+            speed (fp16)
+            curl_dir (fp16x3 (could be vec3))
+            isInteractable (bool)
+            calculationSkip (bool)
+*/
+
 export class SpritePool {
   constructor(canvas, options = {}) {
     this.canvas = canvas; 
     this.spriteSize = options.spriteSize ?? 3;
     this.maxSprites = options.maxSprites ?? 100000;
     
-    /*
-    The main thread should only be aware of (per sprite):
-      tx, ty, tz (target positions)
-      R, G, B, A (target colour and alpha)
-
-    Sprites that have alpha of <0.01 should not be calculated.
-
-    All other params are stored within the shader and GPU. CPU should not have to compute anything.
-    The ideal architecture is that CPU assigns target positions for sprites and GPU
-    does the physics computation to bring those sprites to the position. 
-
-    Will likely need to use GPGPU or PP-VAO techniques
-
-    GPU params:
-
-    Global Params - should be updatable by CPU:
-      > buffer for target positions assigned by CPU - up to 200,000 points
-      > flow redirectors - in additional to sprite maps given by the CPU, there may be 3D models
-        assigned by the CPU to be rendered alongside sprite maps. GPU needs to compute.
-
-
-    Per Sprite Params:
-      Positioning (current): X, Y, Z (fp32)
-      Positioning (target): tx, ty, tz (fp32)
-      Movement: dx, dy, dz (fp16)
-      Colour: R, G, B, A (uint8)
-      SpParams: isDying (bool)
-                drag (fp16)
-                speed (fp16)
-                curl_dir (fp16x3 (could be vec3))
-                isInteractable (bool)
-                calculationSkip (bool)
-    */
-
-    this.stride = 3; 
+    // 21 Floats per sprite * 4 bytes = 84 bytes per sprite.
+    // 1,000,000 sprites = ~80 MB.
+    this.stride = 24;
     this.data = new Float32Array(this.maxSprites * this.stride);
     this.activeSprites = 0; 
     this.currentLayout = [];
 
-    this.gl = this.canvas.getContext('webgl2', { premultipliedAlpha: false }) || 
-              this.canvas.getContext('webgl', { premultipliedAlpha: false });
-
+    this.gl = this.canvas.getContext('webgl2', { 
+        premultipliedAlpha: false,
+        powerPreference: "high-performance" // Demands the dedicated GPU
+    });
+    if (!this.gl) throw new Error("WebGL2 not supported on this device.");
     const gl = this.gl;
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    // Retrieve the strings directly from the RAM cache
-    const vsSource = shaderRamCache.get(shader_vertex_source_path);
-    const fsSource = shaderRamCache.get(shader_fragment_source_path);
+    // 1. Get Shaders from Cache
+    const vsPhysicsSource = shaderRamCache.get(shader_vertex_phys_source_path);
+    const vsRenderSource = shaderRamCache.get(shader_vertex_render_source_path);
+    const fsRenderSource = shaderRamCache.get(shader_fragment_render_source_path);
 
-    if (!vsSource || !fsSource) {
+    if (!vsPhysicsSource || !vsRenderSource || !fsRenderSource) {
         throw new Error("WebGL failed: Shaders missing from RAM cache.");
     }
 
-    const vertexShader = this._compileShader(gl, gl.VERTEX_SHADER, vsSource);
-    const fragmentShader = this._compileShader(gl, gl.FRAGMENT_SHADER, fsSource);
+    // 2. Compile Shaders
+    const vertexPhysicsShader = this._compileShader(gl, gl.VERTEX_SHADER, vsPhysicsSource);
+    const vertexRenderShader = this._compileShader(gl, gl.VERTEX_SHADER, vsRenderSource); 
+    const fragmentRenderShader = this._compileShader(gl, gl.FRAGMENT_SHADER, fsRenderSource);
     
-    this.program = gl.createProgram();
-    gl.attachShader(this.program, vertexShader);
-    gl.attachShader(this.program, fragmentShader);
-    gl.linkProgram(this.program);
-    gl.useProgram(this.program);
+    // Dummy fragment shader to appease strict WebGL linkers for the physics compute pass
+    const dummyFsSource = `#version 300 es\nvoid main() {}`;
+    const dummyFsShader = this._compileShader(gl, gl.FRAGMENT_SHADER, dummyFsSource);
 
-    this.posLoc = gl.getAttribLocation(this.program, "a_position");
-    this.alphaLoc = gl.getAttribLocation(this.program, "a_alpha");
-    this.resLoc = gl.getUniformLocation(this.program, "u_resolution");
-    this.sizeLoc = gl.getUniformLocation(this.program, "u_spriteSize");
-
-    this.buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
-
-    const BYTES_PER_FLOAT = 4;
-    const STRIDE_BYTES = this.stride * BYTES_PER_FLOAT;
-
-    gl.enableVertexAttribArray(this.posLoc);
-    gl.vertexAttribPointer(this.posLoc, 2, gl.FLOAT, false, STRIDE_BYTES, 0);
-
-    gl.enableVertexAttribArray(this.alphaLoc);
-    gl.vertexAttribPointer(this.alphaLoc, 1, gl.FLOAT, false, STRIDE_BYTES, 2 * BYTES_PER_FLOAT);
+    // ==========================================
+    // 3. BUILD PHYSICS PROGRAM
+    // ==========================================
+    this.physicsProgram = gl.createProgram();
+    gl.attachShader(this.physicsProgram, vertexPhysicsShader);
+    gl.attachShader(this.physicsProgram, dummyFsShader); // Appease the WebGL gods
     
-    this.layoutCenterX = undefined;
-    this.layoutCenterY = undefined;
-    this.originX = undefined;
-    this.originY = undefined;
+    this._bindAttributeLocations(this.physicsProgram);
+
+    // Tell WebGL which 'out' variables to capture BEFORE linking
+    const feedbackVaryings = [
+      'out_pos_dying', 'out_target_drag', 'out_vel_speed', 
+      'out_color', 'out_curl_interact', 'out_skip_pad'
+    ];
+    gl.transformFeedbackVaryings(this.physicsProgram, feedbackVaryings, gl.INTERLEAVED_ATTRIBS);
+    gl.linkProgram(this.physicsProgram);
+
+    // ==========================================
+    // 4. BUILD RENDER PROGRAM 
+    // ==========================================
+    this.renderProgram = gl.createProgram();
+    gl.attachShader(this.renderProgram, vertexRenderShader);
+    gl.attachShader(this.renderProgram, fragmentRenderShader);
+    
+    this._bindAttributeLocations(this.renderProgram);
+    gl.linkProgram(this.renderProgram);
+
+    // ==========================================
+    // 5. PING-PONG BUFFERS & VAOs
+    // ==========================================
+    // FIX: Initialize buffer data FIRST before touching Transform Feedback binds
+    this.buffers = [gl.createBuffer(), gl.createBuffer()];
+    for (let i = 0; i < 2; i++) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffers[i]);
+        gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+    // Set up VAOs and map the massive 21-float stride
+    this.vaos = [gl.createVertexArray(), gl.createVertexArray()];
+    const BYTES = 4;
+    const STRIDE_B = this.stride * BYTES;
+
+    for (let i = 0; i < 2; i++) {
+        gl.bindVertexArray(this.vaos[i]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffers[i]);
+
+        this._enableAttrib(0, 4, STRIDE_B, 0 * BYTES);  // pos_dying
+        this._enableAttrib(1, 4, STRIDE_B, 4 * BYTES);  // target_drag
+        this._enableAttrib(2, 4, STRIDE_B, 8 * BYTES);  // vel_speed
+        this._enableAttrib(3, 4, STRIDE_B, 12 * BYTES); // color
+        this._enableAttrib(4, 4, STRIDE_B, 16 * BYTES); // curl_interact
+        this._enableAttrib(5, 4, STRIDE_B, 20 * BYTES); // skip_pad
+    }
+    gl.bindVertexArray(null);
+
+    // Set up Transform Feedback routing (Buffer A writes to B, B writes to A)
+    this.transformFeedbacks = [gl.createTransformFeedback(), gl.createTransformFeedback()];
+    for (let i = 0; i < 2; i++) {
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.transformFeedbacks[i]);
+        gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, this.buffers[(i + 1) % 2]); 
+    }
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+
+    this.readIndex = 0; 
+    
+    // Grab Uniform Locations for Rendering
+    this.resLoc = gl.getUniformLocation(this.renderProgram, "u_resolution");
+    this.sizeLoc = gl.getUniformLocation(this.renderProgram, "u_spriteSize");
 
     this._renderLoop = this._renderLoop.bind(this);
     requestAnimationFrame(this._renderLoop);
+  }
+
+  // Forces both programs to use the exact same attribute locations so our VAOs work universally
+  _bindAttributeLocations(program) {
+    const gl = this.gl;
+    gl.bindAttribLocation(program, 0, "a_pos_dying");
+    gl.bindAttribLocation(program, 1, "a_target_drag");
+    gl.bindAttribLocation(program, 2, "a_vel_speed");
+    gl.bindAttribLocation(program, 3, "a_color");
+    gl.bindAttribLocation(program, 4, "a_curl_interact");
+    gl.bindAttribLocation(program, 5, "a_skip_pad");
+  }
+
+  _enableAttrib(loc, size, stride, offset) {
+    this.gl.enableVertexAttribArray(loc);
+    this.gl.vertexAttribPointer(loc, size, this.gl.FLOAT, false, stride, offset);
   }
 
   updateBounds(bounds) {
@@ -259,12 +316,13 @@ export class SpritePool {
     this.height = bounds.windowHeight;
     this.canvas.width = this.width;
     this.canvas.height = this.height;
-    
     this.originX = bounds.originX;
     this.originY = bounds.originY;
 
     this.gl.viewport(0, 0, this.width, this.height);
-    this.gl.useProgram(this.program);
+    
+    // Update resolution uniforms in the render program
+    this.gl.useProgram(this.renderProgram);
     this.gl.uniform2f(this.resLoc, this.width, this.height);
     this.gl.uniform1f(this.sizeLoc, this.spriteSize * 1.15);
 
@@ -281,7 +339,7 @@ export class SpritePool {
     if (this.layoutCenterX === undefined) return;
     this.layoutCenterX = newX;
     this.layoutCenterY = newY;
-    this._updateBufferData(); // Snap to new positions instantly
+    this._updateBufferData(); 
   }
 
   resetMove() {
@@ -292,43 +350,74 @@ export class SpritePool {
 
   async mutateTo(layoutGenerator) {
     const result = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
-    const newLayout = result.layout || result;
-    const zones = result.zones || [];
-
-    self.postMessage({ type: 'INTERACTIVE_ZONES', zones: zones });
-
-    this.currentLayout = newLayout;
-    this._updateBufferData(); // Push layout to GPU instantly
+    this.currentLayout = result.layout || result;
+    self.postMessage({ type: 'INTERACTIVE_ZONES', zones: result.zones || [] });
+    this._updateBufferData(); 
   }
 
   _updateBufferData() {
     const offsetX = this.layoutCenterX || 0;
     const offsetY = this.layoutCenterY || 0;
 
-    // Determine how many sprites we actually need to draw
     this.activeSprites = Math.min(this.currentLayout.length, this.maxSprites);
 
     for (let i = 0; i < this.activeSprites; i++) {
       const pt = this.currentLayout[i];
       const idx = i * this.stride;
       
-      // Calculate final absolute X/Y 
-      this.data[idx + 0] = pt.isAbsolute ? pt.x : pt.x + offsetX;
-      this.data[idx + 1] = pt.isAbsolute ? pt.y : pt.y + offsetY;
-      // Use provided alpha, default to 1
-      this.data[idx + 2] = pt.a !== undefined ? pt.a : 1.0; 
+      const targetX = pt.isAbsolute ? pt.x : pt.x + offsetX;
+      const targetY = pt.isAbsolute ? pt.y : pt.y + offsetY;
+
+      // 0: pos_dying [x, y, z, isDying]
+      this.data[idx + 0] = targetX;
+      this.data[idx + 1] = targetY;
+      this.data[idx + 2] = 0;
+      this.data[idx + 3] = 0; 
+
+      // 4: target_drag [tx, ty, tz, drag]
+      this.data[idx + 4] = targetX;
+      this.data[idx + 5] = targetY;
+      this.data[idx + 6] = 0;
+      this.data[idx + 7] = 0.1; 
+
+      // 8: vel_speed [dx, dy, dz, speed]
+      this.data[idx + 8] = 0; 
+      this.data[idx + 9] = 0; 
+      this.data[idx + 10] = 0; 
+      this.data[idx + 11] = 0.15; 
+
+      // 12: color [r, g, b, a]
+      this.data[idx + 12] = 1.0; 
+      this.data[idx + 13] = 1.0; 
+      this.data[idx + 14] = 1.0; 
+      this.data[idx + 15] = pt.a !== undefined ? pt.a : 1.0; 
+
+      // 16: curl_interact [cx, cy, cz, isInteractable]
+      this.data[idx + 16] = 0; 
+      this.data[idx + 17] = 0; 
+      this.data[idx + 18] = 0; 
+      this.data[idx + 19] = pt.isUI ? 1.0 : 0.0; 
+
+      // 20: skip_pad [calcSkip, pad, pad, pad]
+      this.data[idx + 20] = 0; 
+      this.data[idx + 21] = 0; 
+      this.data[idx + 22] = 0; 
+      this.data[idx + 23] = 0; 
     }
 
     const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    
-    // Only upload the subset of the array that we actually updated
     const subArray = this.data.subarray(0, this.activeSprites * this.stride);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, subArray);
+
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+    for (let i = 0; i < 2; i++) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffers[i]);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, subArray);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
   explodeAt(px, py) {
-    // Deliberate No-op. Ensures main thread doesn't crash when it fires this event.
+    // Will be a Uniform soon!
   }
 
   _compileShader(gl, type, source) {
@@ -336,7 +425,7 @@ export class SpritePool {
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      console.error("Shader fail:", gl.getShaderInfoLog(shader));
+      console.error(`Shader fail (${type === gl.VERTEX_SHADER ? 'VERTEX' : 'FRAGMENT'}):`, gl.getShaderInfoLog(shader));
       gl.deleteShader(shader);
     }
     return shader;
@@ -344,15 +433,36 @@ export class SpritePool {
 
   _renderLoop() {
     const gl = this.gl;
-    
+    if (this.activeSprites === 0) {
+        console.log("[renderLoop] No active sprites on the scene");
+        requestAnimationFrame(this._renderLoop);
+        return;
+    }
+
+    const writeIndex = (this.readIndex + 1) % 2;
+
+    // --- PASS 1: PHYSICS COMPUTE ---
+    gl.useProgram(this.physicsProgram);
+    gl.bindVertexArray(this.vaos[this.readIndex]);
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.transformFeedbacks[this.readIndex]);
+
+    gl.enable(gl.RASTERIZER_DISCARD); 
+    gl.beginTransformFeedback(gl.POINTS);
+    gl.drawArrays(gl.POINTS, 0, this.activeSprites);
+    gl.endTransformFeedback();
+    gl.disable(gl.RASTERIZER_DISCARD);
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+
+    // --- PASS 2: RENDER TO SCREEN ---
+    gl.useProgram(this.renderProgram);
     gl.clearColor(0, 0, 0, 0); 
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // Draw only the active sprites, skipping physics calculations entirely
-    if (this.activeSprites > 0) {
-      gl.drawArrays(gl.POINTS, 0, this.activeSprites);
-    }
+    gl.bindVertexArray(this.vaos[writeIndex]);
+    gl.drawArrays(gl.POINTS, 0, this.activeSprites);
+    gl.bindVertexArray(null);
 
+    this.readIndex = writeIndex;
     requestAnimationFrame(this._renderLoop);
   }
 }
