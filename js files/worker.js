@@ -1,4 +1,4 @@
-console.log("Worker is working. Yup.");
+console.log("[Worker] Is working. Yup.");
 
 let DEFAULT_SPRITE_SPEED = 0.15;  
 let DEFAULT_SPRITE_SPEED_VARIANCE = 0.04;
@@ -93,7 +93,7 @@ class ShapeCache {
 
     // Fire all fetches concurrently
     await Promise.all(fetchPromises);
-    console.log("All letter sprites cached and ready.");
+    console.log("[Worker > ShapeCache] All letter sprites cached and ready.");
   }
 }
 
@@ -140,7 +140,7 @@ class ShaderCache {
     });
 
     await Promise.all(fetchPromises);
-    console.log("Shaders preloaded and cached.");
+    console.log("[Worker > ShaderCache] Shaders preloaded and cached.");
   }
 }
 
@@ -184,10 +184,10 @@ export class SpritePool {
   constructor(canvas, options = {}) {
     this.canvas = canvas; 
     this.spriteSize = options.spriteSize ?? 3;
-    this.maxSprites = options.maxSprites ?? 100000;
+    this.maxSprites = options.maxSprites ?? 200000;
     
     // 21 Floats per sprite * 4 bytes = 84 bytes per sprite.
-    // 1,000,000 sprites = ~80 MB.
+    // 1,000,000 sprites = ~91.5 MB.
     this.stride = 24;
     this.data = new Float32Array(this.maxSprites * this.stride);
     this.activeSprites = 0; 
