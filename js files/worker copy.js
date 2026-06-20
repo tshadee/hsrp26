@@ -36,6 +36,52 @@ const EVX = 14, EVY = 15;          // Expel Velocity
 const CURL_DIR = 16, CURL_CW = 17;
 const IS_UI = 18;
 
+
+//TODO: moving shader source to physengine.glsl
+
+const shader_vertex_source_path = './physengine.vert.glsl'
+const shader_fragment_source_path = './physengine.frag.glsl'
+
+const vsSource = `
+  attribute vec2 a_position;
+  attribute float a_alpha;
+  
+  uniform vec2 u_resolution;
+  uniform float u_spriteSize;
+  
+  varying float v_alpha;
+
+  void main() {
+    // Convert pixels from 0->resolution to 0.0->1.0
+    vec2 zeroToOne = a_position / u_resolution;
+    // Convert from 0->1 to 0->2
+    vec2 zeroToTwo = zeroToOne * 2.0;
+    // Convert from 0->2 to -1->+1 (clip space)
+    vec2 clipSpace = zeroToTwo - 1.0;
+    
+    // WebGL Y is inverted compared to Canvas 2D, so we flip it
+    gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+    
+    // Set point size and pass alpha to the fragment shader
+    gl_PointSize = u_spriteSize;
+    v_alpha = a_alpha;
+  }
+`;
+
+const fsSource = `
+  precision mediump float;
+  varying float v_alpha;
+
+  void main() {
+    // If alpha is zero, discard the pixel entirely to save GPU cycles
+    if (v_alpha <= 0.005) {
+      discard; 
+    }
+    // Draw a white square with the calculated alpha
+    gl_FragColor = vec4(1.0, 1.0, 1.0, v_alpha);
+  }
+`;
+
 function getSeededRandom(seed) {
   return function() {
     seed = (seed * 9301 + 49297) % 233280;
@@ -67,7 +113,7 @@ class ShapeCache {
       // Numbers
       '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
       // Symbols
-      'question', 'slash', 'period', 'exclamation', 'at', 'hash', 'dollar', 'percent', 'caret', 'ampersand', 'asterisk', 'left_paren', 'right_paren', 'comma', 'apostrophe', 'semicolon', 'colon', 'less_than', 'greater_than', 'plus', 'equals', 'dash', 'left_brace', 'right_brace', 'left_bracket', 'right_bracket', 'pipe', 'tilde', 'backtick'
+      'question', 'slash', 'period', 'exclamation', 'at', 'hash', 'dollar', 'percent', 'caret', 'ampersand', 'asterisk', 'left_paren', 'right_paren', 'space', 'comma', 'apostrophe', 'quotation', 'semicolon', 'colon', 'less_than', 'greater_than', 'plus', 'equals', 'dash', 'left_brace', 'right_brace', 'left_bracket', 'right_bracket', 'pipe', 'tilde', 'backtick'
     ];
   }
 
@@ -111,47 +157,36 @@ class ShapeCache {
   }
 }
 
-const shaderRamCache = new Map();
+class ShaderLoader {
+  static async load(vertPath, fragPath) {
+    const cacheStorage = await caches.open('hsrp-shaders-v1');
+    const sources = {};
 
-const shader_vertex_source_path = './physengine.vert.glsl';
-const shader_fragment_source_path = './physengine.frag.glsl';
-
-class ShaderCache {
-  static async preload() {
-    // 1. Bump the version to invalidate the old cache
-    const cacheStorage = await caches.open('hsrp-shaders-v3'); 
-    const paths = [shader_vertex_source_path, shader_fragment_source_path];
-
-    const fetchPromises = paths.map(async (url) => {
-      if (shaderRamCache.has(url)) return;
-
+    const fetchShader = async (url, type) => {
       let response = await cacheStorage.match(url);
-
+      
       if (!response) {
         try {
-          // 2. Add a timestamp query parameter to bust the browser's HTTP cache
-          const fetchUrl = `${url}?t=${Date.now()}`;
-          response = await fetch(fetchUrl);
-          
+          response = await fetch(url);
           if (response.ok) {
-            // Store it using the ORIGINAL url as the key, not the timestamped one
             await cacheStorage.put(url, response.clone());
           } else {
-            console.error(`Failed to fetch shader: ${url}`);
-            return;
+            throw new Error(`Failed to fetch ${url}`);
           }
         } catch (e) {
-          console.warn(`Network fail for shader ${url}`);
-          return;
+          console.error(`Network fail for shader: ${url}`, e);
+          return null;
         }
       }
+      sources[type] = await response.text();
+    };
 
-      const source = await response.text();
-      shaderRamCache.set(url, source);
-    });
+    await Promise.all([
+      fetchShader(vertPath, 'vertex'),
+      fetchShader(fragPath, 'fragment')
+    ]);
 
-    await Promise.all(fetchPromises);
-    console.log("Shaders preloaded and cached.");
+    return sources;
   }
 }
 
@@ -159,63 +194,93 @@ class ShaderCache {
 
 export class SpritePool {
   constructor(canvas, options = {}) {
+    this.maxSprites = options.maxSprites ?? 50000;
+    
+    // Allocate memory
+    this.data = new Float32Array(this.maxSprites * STRIDE);
+    this.activeIndices = new Int32Array(this.maxSprites);
+    this.activeHashes = new Float64Array(this.maxSprites * STRIDE); 
+    this.freeIndices = new Int32Array(this.maxSprites);
+    this.deadIndices = new Int32Array(this.maxSprites);
+    this.remainingTargets = []; // array for leftover targets
+    this.gridHead = new Int32Array(22500); // 150 x 150 grid
+    this.gridNext = new Int32Array(this.maxSprites);
+    this.targetClaimed = new Uint8Array(this.maxSprites);
+    
+    // Initialize standard randoms once
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      this.data[idx + X] = 0;
+      this.data[idx + Y] = 0;
+      this.data[idx + A] = 0;
+      this.data[idx + TX] = 0;
+      this.data[idx + TY] = 0;
+      this.data[idx + TA] = 0;
+      this.data[idx + CURL_DIR] = Math.random() * 2 - 1;
+      this.data[idx + CURL_CW] = Math.random() * 2 - 1;
+      this.data[idx + DRAG] = SPRITE_DRAG_BASE + Math.random() * SPRITE_DRAG_VARIANCE;
+      this.data[idx + SPEED] = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
+      this.data[idx + SHED] = 2; 
+      this.data[idx + DYING] = 0;
+    }
+
     this.canvas = canvas; 
     this.spriteSize = options.spriteSize ?? 3;
-    this.maxSprites = options.maxSprites ?? 100000;
-    
-    // Stripped down to bare minimum: X, Y, Alpha
-    this.stride = 3; 
-    this.data = new Float32Array(this.maxSprites * this.stride);
-    this.activeSprites = 0; 
-    this.currentLayout = [];
+    this.interactionType = options.interactionType ?? 'ui'; // Store interaction type
+    this.lastMorphTime = performance.now(); // Track last morph
 
     this.gl = this.canvas.getContext('webgl2', { premultipliedAlpha: false }) || 
-              this.canvas.getContext('webgl', { premultipliedAlpha: false });
+          this.canvas.getContext('webgl', { premultipliedAlpha: false });
 
     const gl = this.gl;
 
+    // Enable alpha blending
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    // Retrieve the strings directly from the RAM cache
-    const vsSource = shaderRamCache.get(shader_vertex_source_path);
-    const fsSource = shaderRamCache.get(shader_fragment_source_path);
-
-    if (!vsSource || !fsSource) {
-        throw new Error("WebGL failed: Shaders missing from RAM cache.");
-    }
-
+    // 1. Compile Shaders & Link Program
     const vertexShader = this._compileShader(gl, gl.VERTEX_SHADER, vsSource);
     const fragmentShader = this._compileShader(gl, gl.FRAGMENT_SHADER, fsSource);
-    
     this.program = gl.createProgram();
     gl.attachShader(this.program, vertexShader);
     gl.attachShader(this.program, fragmentShader);
     gl.linkProgram(this.program);
     gl.useProgram(this.program);
 
+    // 2. Look up locations
     this.posLoc = gl.getAttribLocation(this.program, "a_position");
     this.alphaLoc = gl.getAttribLocation(this.program, "a_alpha");
     this.resLoc = gl.getUniformLocation(this.program, "u_resolution");
     this.sizeLoc = gl.getUniformLocation(this.program, "u_spriteSize");
 
+    // 3. Create the GPU buffer
     this.buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    // Allocate GPU memory once using DYNAMIC_DRAW (since we update it every frame)
     gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
 
+    // 4. Teach WebGL how to read interleaved array
     const BYTES_PER_FLOAT = 4;
-    const STRIDE_BYTES = this.stride * BYTES_PER_FLOAT;
+    const STRIDE_BYTES = STRIDE * BYTES_PER_FLOAT;
 
     gl.enableVertexAttribArray(this.posLoc);
+    // Read 2 floats (x, y), skip STRIDE bytes, start at offset 0
     gl.vertexAttribPointer(this.posLoc, 2, gl.FLOAT, false, STRIDE_BYTES, 0);
 
     gl.enableVertexAttribArray(this.alphaLoc);
+    // Read 1 float (alpha), skip STRIDE bytes, start at offset 2 floats (8 bytes)
     gl.vertexAttribPointer(this.alphaLoc, 1, gl.FLOAT, false, STRIDE_BYTES, 2 * BYTES_PER_FLOAT);
     
     this.layoutCenterX = undefined;
     this.layoutCenterY = undefined;
     this.originX = undefined;
     this.originY = undefined;
+    
+    this.pointerX = -1000;
+    this.pointerY = -1000;
+
+    this.lastTime = performance.now();
+    this.mutateId = 0;
 
     this._renderLoop = this._renderLoop.bind(this);
     requestAnimationFrame(this._renderLoop);
@@ -231,24 +296,54 @@ export class SpritePool {
     this.originY = bounds.originY;
 
     this.gl.viewport(0, 0, this.width, this.height);
-    this.gl.useProgram(this.program);
     this.gl.uniform2f(this.resLoc, this.width, this.height);
     this.gl.uniform1f(this.sizeLoc, this.spriteSize * 1.15);
 
     if (this.layoutCenterX === undefined) {
       this.layoutCenterX = this.originX;
       this.layoutCenterY = this.originY;
+      
+      // Seed initial positions to origin so they don't fly in from 0,0
+      for(let i=0; i < this.maxSprites; i++) {
+        let idx = i * STRIDE;
+        this.data[idx + X] = this.originX;
+        this.data[idx + Y] = this.originY;
+      }
     }
     
     this.containerWidth = bounds.width;
     this.containerHeight = bounds.height;
   }
 
+
+  setSpriteTarget(idx, tx, ty, ta, isUI = 0) {
+    this.data[idx + SX] = this.data[idx + X];
+    this.data[idx + SY] = this.data[idx + Y];
+    this.data[idx + SA] = this.data[idx + A];
+
+    if (tx !== undefined) this.data[idx + TX] = tx;
+    if (ty !== undefined) this.data[idx + TY] = ty;
+    if (ta !== undefined) this.data[idx + TA] = ta; 
+    if (isUI !== undefined) this.data[idx + IS_UI] = isUI; // Write the flag
+
+    this.data[idx + PROG] = 0; 
+    this.data[idx + SPEED] = DEFAULT_SPRITE_SPEED + Math.random() * DEFAULT_SPRITE_SPEED_VARIANCE;
+  }
+
   moveTo(newX, newY) {
     if (this.layoutCenterX === undefined) return;
+    const dx = newX - this.layoutCenterX;
+    const dy = newY - this.layoutCenterY;
+
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      if (this.data[idx + DYING] === 0 && this.data[idx + TA] > 0) {
+        this.setSpriteTarget(idx, this.data[idx + TX] + dx, this.data[idx + TY] + dy, this.data[idx + TA]);
+      }
+    }
+
     this.layoutCenterX = newX;
     this.layoutCenterY = newY;
-    this._updateBufferData(); // Snap to new positions instantly
   }
 
   resetMove() {
@@ -258,44 +353,256 @@ export class SpritePool {
   }
 
   async mutateTo(layoutGenerator) {
+    this.lastMorphTime = performance.now();
+    const currentMutateId = ++this.mutateId;
+
     const result = await layoutGenerator.getLayout(this.containerWidth, this.containerHeight, this.spriteSize);
+    if (currentMutateId !== this.mutateId) return;
+    
     const newLayout = result.layout || result;
     const zones = result.zones || [];
 
     self.postMessage({ type: 'INTERACTIVE_ZONES', zones: zones });
 
-    this.currentLayout = newLayout;
-    this._updateBufferData(); // Push layout to GPU instantly
-  }
-
-  _updateBufferData() {
     const offsetX = this.layoutCenterX || 0;
     const offsetY = this.layoutCenterY || 0;
 
-    // Determine how many sprites we actually need to draw
-    this.activeSprites = Math.min(this.currentLayout.length, this.maxSprites);
-
-    for (let i = 0; i < this.activeSprites; i++) {
-      const pt = this.currentLayout[i];
-      const idx = i * this.stride;
-      
-      // Calculate final absolute X/Y 
-      this.data[idx + 0] = pt.isAbsolute ? pt.x : pt.x + offsetX;
-      this.data[idx + 1] = pt.isAbsolute ? pt.y : pt.y + offsetY;
-      // Use provided alpha, default to 1
-      this.data[idx + 2] = pt.a !== undefined ? pt.a : 1.0; 
+    // Reset dying states safely
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      if (this.data[idx + DYING] === 1 && this.data[idx + A] < 0.01) {
+        this.data[idx + TA] = 0;
+      }
+      this.data[idx + SHED] = 2; 
     }
 
-    const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    let activeCount = 0;
+    let deadCount = 0;
+    let freeCount = 0; // Initialize freeCount early
+
+    // 1. Calculate EXACT Hashes & Route Dying Sprites
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      
+      if (this.data[idx + A] > 0.01 || this.data[idx + TA] > 0) {
+        if (this.data[idx + DYING] === 1) {
+          this.freeIndices[freeCount++] = idx;
+        } else {
+          this.activeIndices[activeCount] = idx;
+          // fround forces JS Float64s into Float32 precision before rounding
+          const tx32 = Math.fround(this.data[idx + TX]);
+          const ty32 = Math.fround(this.data[idx + TY]);
+          const rx = Math.round(tx32) + 10000;
+          const ry = Math.round(ty32) + 10000;
+          this.activeHashes[idx] = (ry * 100000) + rx;
+          activeCount++;
+        }
+      } else {
+        this.deadIndices[deadCount++] = idx;
+      }
+    }
+
+    // 2. Sort Active Sprites & Targets by Exact Hash
+    const activeView = this.activeIndices.subarray(0, activeCount);
+    activeView.sort((idxA, idxB) => this.activeHashes[idxA] - this.activeHashes[idxB]);
+
+    const targetCount = newLayout.length;
+    for (let i = 0; i < targetCount; i++) {
+       const pt = newLayout[i];
+       pt.tx = pt.isAbsolute ? pt.x : pt.x + offsetX;
+       pt.ty = pt.isAbsolute ? pt.y : pt.y + offsetY;
+       
+       // fround fix, again
+       const tx32 = Math.fround(pt.tx);
+       const ty32 = Math.fround(pt.ty);
+       const rx = Math.round(tx32) + 10000;
+       const ry = Math.round(ty32) + 10000;
+       pt.hash = (ry * 100000) + rx;
+    }
+    newLayout.sort((a, b) => a.hash - b.hash);
+
+    // 3. Two-Pointer EXACT Intersection (The "Locking" Phase)
+    let pA = 0;
+    let pT = 0;
+    this.remainingTargets.length = 0; 
+
+    while (pA < activeCount && pT < targetCount) {
+      let idx = activeView[pA];
+      let hashA = this.activeHashes[idx];
+      let target = newLayout[pT];
+
+      if (hashA === target.hash) {
+        this.data[idx + DYING] = 0;
+        this.data[idx + SHED] = 2;
+        this.data[idx + TA] = target.a ?? 1;
+        this.data[idx + IS_UI] = target.isUI ?? 0;
+        pA++; pT++;
+      } else if (hashA < target.hash) {
+        this.freeIndices[freeCount++] = idx; // Appends to the pre-populated dying sprites
+        pA++;
+      } else {
+        this.remainingTargets.push(target);
+        pT++;
+      }
+    }
+
+    while (pA < activeCount) this.freeIndices[freeCount++] = activeView[pA++];
+    while (pT < targetCount) this.remainingTargets.push(newLayout[pT++]);
+
+    // 4. ECS SPATIAL HASHING (The "Rearrange" Phase)
+    const remainingCount = this.remainingTargets.length;
+    const CHUNK_SIZE = 64; 
+    const GRID_COLS = 150; 
+    const GRID_ROWS = 150;
+    const OFFSET = 3000; // Shift bounds so offscreen coordinates don't break the array index
+
+    this.gridHead.fill(-1);
+    this.targetClaimed.fill(0, 0, remainingCount);
+
+    // Populate the flat spatial grid with leftover targets
+    for (let i = 0; i < remainingCount; i++) {
+      const pt = this.remainingTargets[i];
+      const cx = Math.floor((pt.tx + OFFSET) / CHUNK_SIZE);
+      const cy = Math.floor((pt.ty + OFFSET) / CHUNK_SIZE);
+      
+      const safeCx = Math.max(0, Math.min(GRID_COLS - 1, cx));
+      const safeCy = Math.max(0, Math.min(GRID_ROWS - 1, cy));
+      const cell = safeCy * GRID_COLS + safeCx;
+
+      this.gridNext[i] = this.gridHead[cell];
+      this.gridHead[cell] = i;
+    }
+
+    // 333 per frame @ 60fps = ~20,000 sprites processed per second
+    const BATCH_SIZE = YIELD_BATCH_SIZE_PER_FRAME;
+
+    // 5. Localized Nearest-Neighbor Assignment
+    const MAX_MORPH_DIST = 150;
+    const MAX_MORPH_DIST_SQ = MAX_MORPH_DIST * MAX_MORPH_DIST;
     
-    // Only upload the subset of the array that we actually updated
-    const subArray = this.data.subarray(0, this.activeSprites * this.stride);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, subArray);
+    for (let i = 0; i < freeCount; i++) {
+
+      if (i > 0 && i % BATCH_SIZE === 0) {
+        this.lastMorphTime = performance.now(); // Keep awake
+        await yieldFrame(); 
+        if (currentMutateId !== this.mutateId) return; 
+      }
+
+
+      let idx = this.freeIndices[i];
+      let sx = this.data[idx + X];
+      let sy = this.data[idx + Y];
+      
+      let cx = Math.floor((sx + OFFSET) / CHUNK_SIZE);
+      let cy = Math.floor((sy + OFFSET) / CHUNK_SIZE);
+
+      let bestTargetIdx = -1;
+      let bestDistSq = MAX_MORPH_DIST_SQ;
+
+      // Scan the immediate 3x3 chunk neighborhood
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          let checkCx = cx + dx;
+          let checkCy = cy + dy;
+          
+          if (checkCx >= 0 && checkCx < GRID_COLS && checkCy >= 0 && checkCy < GRID_ROWS) {
+            let cell = checkCy * GRID_COLS + checkCx;
+            let targetIdx = this.gridHead[cell];
+            
+            // Traverse the linked list in this chunk
+            while (targetIdx !== -1) {
+              if (this.targetClaimed[targetIdx] === 0) {
+                let pt = this.remainingTargets[targetIdx];
+                let distX = sx - pt.tx;
+                let distY = sy - pt.ty;
+                let distSq = distX * distX + distY * distY;
+                
+                if (distSq < bestDistSq) {
+                  bestDistSq = distSq;
+                  bestTargetIdx = targetIdx;
+                }
+              }
+              targetIdx = this.gridNext[targetIdx];
+            }
+          }
+        }
+      }
+
+      if (bestTargetIdx !== -1) {
+        // Claim target in range
+        this.targetClaimed[bestTargetIdx] = 1;
+        const pt = this.remainingTargets[bestTargetIdx];
+        this.data[idx + DYING] = 0;
+        this.data[idx + SHED] = 2; 
+        this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1, pt.isUI ?? 0);
+      } else {
+        // No text targets left within 150px. Decimate and dissolve.
+        const driftAngle = Math.random() * Math.PI * 2;
+        const driftRadius = 80 + Math.random() * 80;
+        
+        this.setSpriteTarget(idx, sx + Math.cos(driftAngle) * driftRadius, sy + Math.sin(driftAngle) * driftRadius, 0, 0); 
+        this.data[idx + SHED] = SPRITE_SHEDDING_THRESHOLD + Math.random() * SPRITE_SHEDDING_THRESHOLD * 2;
+      }
+    }
+
+    // 6. Localized Spawn Phase (For unfulfilled targets)
+    for (let i = 0; i < remainingCount; i++) {
+
+      if (i > 0 && i % BATCH_SIZE === 0) {
+        this.lastMorphTime = performance.now(); // Keep awake
+        await yieldFrame();
+        if (currentMutateId !== this.mutateId) return;
+      }
+
+      if (this.targetClaimed[i] === 0) {
+        if (deadCount > 0) {
+          deadCount--;
+          let idx = this.deadIndices[deadCount]; 
+          const pt = this.remainingTargets[i];
+          
+          const angle = Math.random() * Math.PI * 2;
+          const radius = SPRITE_SPAWN_RADIUS_BASE + Math.random() * SPRITE_SPAWN_RADIUS_VARIANCE; 
+          this.data[idx + X] = pt.tx + Math.cos(angle) * radius;
+          this.data[idx + Y] = pt.ty + Math.sin(angle) * radius;
+          this.data[idx + A] = 0; 
+          this.data[idx + DYING] = 0;
+          this.data[idx + SHED] = 2; 
+          this.data[idx + DRAG] = SPRITE_DRAG_BASE + Math.random() * SPRITE_DRAG_VARIANCE;
+          
+          this.setSpriteTarget(idx, pt.tx, pt.ty, pt.a ?? 1, pt.isUI ?? 0);
+        }
+      }
+    }
   }
 
   explodeAt(px, py) {
-    // Deliberate No-op. Ensures main thread doesn't crash when it fires this event.
+    this.lastMorphTime = performance.now(); // Wake up from sleep
+
+    const radius = this.width * SPRITE_CLICK_FORCE_RADIUS; 
+    const forceMax = SPRITE_CLICK_FORCE; 
+    
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      if (this.data[idx + IS_UI] !== 1) continue;
+      if (this.data[idx + A] === 0 || this.data[idx + DYING] === 1) continue;
+
+      const dx = this.data[idx + X] - px;
+      const dy = this.data[idx + Y] - py;
+      const distSq = dx * dx + dy * dy;
+
+      if (distSq < radius * radius) {
+        const dist = Math.sqrt(distSq);
+        const force = (1 - dist / radius) * forceMax;
+        const angle = Math.atan2(dy, dx) + (Math.random() - 0.5) * 0.5;
+
+        // Apply impulse velocity instead of physical displacement
+        this.data[idx + EVX] += Math.cos(angle) * force;
+        this.data[idx + EVY] += Math.sin(angle) * force;
+
+        // Snap PROG to 1 to force it into the idle spring-back state
+        this.data[idx + PROG] = 1; 
+      }
+    }
   }
 
   _compileShader(gl, type, source) {
@@ -309,16 +616,159 @@ export class SpritePool {
     return shader;
   }
 
-  _renderLoop() {
+  _renderLoop(timestamp) {
+    const dt = timestamp - this.lastTime;
+    this.lastTime = timestamp;
+
+    const SIMULATION_SPEED = 0.75; 
+    const timeScale = (Math.min(dt, 100) / 16.666) * SIMULATION_SPEED;
+
+    const data = this.data; 
+
+    for (let i = 0; i < this.maxSprites; i++) {
+      let idx = i * STRIDE;
+      
+      // Early exit for dead sprites
+      if (data[idx + A] === 0 && data[idx + TA] <= 0) continue;
+
+      const oldX = data[idx + X];
+      const oldY = data[idx + Y];
+      let isDying = data[idx + DYING] === 1;
+
+      // 1. Trigger Decimation
+      if (!isDying && data[idx + PROG] >= data[idx + SHED]) {
+        isDying = true;
+        data[idx + DYING] = 1;
+        data[idx + TA] = 0; // Wipe the target alpha so it knows to stay dead
+        
+        // Pure 360-degree random outward burst
+        const angle = Math.random() * Math.PI * 2;
+        const burstForce = 2 + Math.random() * 5; // Slightly gentler for a dust-like dissipation
+        
+        data[idx + EVX] = Math.cos(angle) * burstForce;
+        data[idx + EVY] = Math.sin(angle) * burstForce;
+      }
+
+      // 2. State Routing
+      if (isDying) {
+        // --- DYING STATE ---
+        const dyingFriction = Math.exp(Math.log(0.8) * timeScale);
+        data[idx + EVX] *= dyingFriction;
+        data[idx + EVY] *= dyingFriction;
+        
+        data[idx + X] += data[idx + EVX] * timeScale;
+        data[idx + Y] += data[idx + EVY] * timeScale;
+        
+        const decayBase = 1 - 0.01;
+        const deathDecay = 1 - Math.exp(Math.log(decayBase) * timeScale); 
+        data[idx + A] += (0 - data[idx + A]) * deathDecay;
+        
+        const globalDx = data[idx + X] - oldX;
+        const globalDy = data[idx + Y] - oldY;
+        const swerveStrength = data[idx + CURL_DIR] * 0.45 * data[idx + DRAG]; 
+        
+        data[idx + X] += -data[idx + CURL_CW] * globalDy * swerveStrength;
+        data[idx + Y] += data[idx + CURL_CW] * globalDx * swerveStrength;
+      }
+
+       else {
+        // --- ALIVE STATE ---
+        const timeSinceMorph = timestamp - this.lastMorphTime;
+        const canSleep = timeSinceMorph > MORPH_TIME_CULLING_MS;
+        
+        const pdx = data[idx + X] - this.pointerX;
+        const pdy = data[idx + Y] - this.pointerY;
+        const pDistSq = pdx * pdx + pdy * pdy;
+        const hoverRadius = this.width * SPRITE_HOVER_RADIUS; 
+        const hoverRadiusSq = hoverRadius * hoverRadius;
+
+        // Optimization: Skip physics if settled, old enough, and cursor is far away
+        if (canSleep && data[idx + PROG] >= 1 && pDistSq > hoverRadiusSq * 4 && data[idx + TA] === data[idx + A]) {
+          data[idx + X] = data[idx + TX];
+          data[idx + Y] = data[idx + TY];
+          data[idx + EVX] = 0;
+          data[idx + EVY] = 0;
+        } else {
+          // Physics Calculation Block
+          let hoverOffsetX = 0;
+          let hoverOffsetY = 0;
+
+          if ( data[idx + IS_UI] === 1 && pDistSq < hoverRadiusSq) {
+            const pDist = Math.sqrt(pDistSq);
+            const fluctuation = 0.5 + Math.sin(timestamp * 0.005 + i) * 1.0;
+            const force = (1 - pDist / hoverRadius) * 20 * fluctuation;
+            const angle = Math.atan2(pdy, pdx);
+            
+            hoverOffsetX = Math.cos(angle) * force;
+            hoverOffsetY = Math.sin(angle) * force;
+          }
+
+          if (data[idx + PROG] < 1) {
+            data[idx + PROG] += data[idx + SPEED] * data[idx + DRAG] * timeScale;
+            if (data[idx + PROG] > 1) data[idx + PROG] = 1;
+
+            const t = data[idx + PROG];
+            let ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
+
+            const globalDx = data[idx + TX] - data[idx + SX];
+            const globalDy = data[idx + TY] - data[idx + SY];
+
+            const baseX = data[idx + SX] + globalDx * ease;
+            const baseY = data[idx + SY] + globalDy * ease;
+
+            const turbulenceForce = Math.sin(t * Math.PI); 
+            const swerveStrength = data[idx + CURL_DIR] * 0.05 * turbulenceForce * data[idx + DRAG]; 
+            
+            data[idx + X] = baseX + (-globalDy * swerveStrength) + hoverOffsetX;
+            data[idx + Y] = baseY + (globalDx * swerveStrength) + hoverOffsetY;
+          } else {
+            // Apply impulse velocity and friction
+            const friction = Math.exp(Math.log(0.9) * data[idx + DRAG] * timeScale);
+            data[idx + EVX] *= friction;
+            data[idx + EVY] *= friction;
+            
+            data[idx + X] += data[idx + EVX] * timeScale;
+            data[idx + Y] += data[idx + EVY] * timeScale;
+
+            // Idle Spring-back
+            const easeBack = 1 - Math.exp(Math.log(0.7) * timeScale);
+            data[idx + X] += ((data[idx + TX] + hoverOffsetX) - data[idx + X]) * easeBack;
+            data[idx + Y] += ((data[idx + TY] + hoverOffsetY) - data[idx + Y]) * easeBack;
+          }
+
+          // Kinetic Alpha / Speed calc
+          const vx = (data[idx + X] - oldX) / timeScale;
+          const vy = (data[idx + Y] - oldY) / timeScale;
+          const speed = Math.sqrt(vx * vx + vy * vy); 
+          const dist = Math.sqrt((data[idx + TX] - data[idx + X])**2 + (data[idx + TY] - data[idx + Y])**2);
+
+          const kineticAlpha = Math.max(0.1, Math.min(1.5, (speed/4) * K_ALPHA_MULTIPLIER));
+          let deadzoneMix = dist < 5 ? 1 : (dist < 15 ? 1 - ((dist - 5) / 10) : 0);
+
+          const desiredAlpha = (1 - deadzoneMix) * kineticAlpha + deadzoneMix * data[idx + TA];
+          data[idx + A] += (desiredAlpha - data[idx + A]) * (1 - Math.exp(Math.log(0.8) * timeScale));
+        }
+      }
+
+      // 3. Floating-Point Hard Clamp & Drawing
+      if (data[idx + A] < 0.005) {
+        data[idx + A] = 0; // Snap it to absolute zero so the early exit catches it next frame
+      }
+
+    }
+
+    // 1. Clear the canvas
     const gl = this.gl;
-    
-    gl.clearColor(0, 0, 0, 0); 
+    gl.clearColor(0, 0, 0, 0); // Transparent background
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // Draw only the active sprites, skipping physics calculations entirely
-    if (this.activeSprites > 0) {
-      gl.drawArrays(gl.POINTS, 0, this.activeSprites);
-    }
+    // 2. Upload the updated Float32Array to the GPU
+    // bufferSubData is incredibly fast for this
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.data, gl.DYNAMIC_DRAW);
+
+    // 3. Draw all 50,000 sprites in ONE command
+    gl.drawArrays(gl.POINTS, 0, this.maxSprites);
 
     requestAnimationFrame(this._renderLoop);
   }
@@ -989,13 +1439,15 @@ else if (child.type === 'SpriteSlider') generator = new SpriteSlider(child.confi
   }
 }
 
-let pool = null;
-let isInitializing = false;
-let messageQueue = [];
+self.onmessage = async (e) => {
+  const data = e.data;
 
-// Helper function to handle messages once the pool is guaranteed to exist
-async function handleMessage(data) {
   switch (data.type) {
+    case 'INIT':
+      pool = new SpritePool(data.canvas, data.options);
+      // Preload default
+      ShapeCache.preload('./shapes/letters/NVMono/');
+      break;
     case 'UPDATE_BOUNDS':
       if (pool) pool.updateBounds(data.bounds);
       break;
@@ -1044,38 +1496,6 @@ async function handleMessage(data) {
       }
       break;
   }
-}
-
-self.onmessage = async (e) => {
-  const data = e.data;
-
-  // 1. If we are currently fetching shaders, queue all incoming messages
-  if (isInitializing) {
-    messageQueue.push(data);
-    return;
-  }
-
-  // 2. Handle the initial boot sequence
-  if (data.type === 'INIT') {
-    isInitializing = true;
-    
-    // Wait for the shaders to be ready
-    await ShaderCache.preload();
-    
-    // Boot the pool
-    pool = new SpritePool(data.canvas, data.options);
-    ShapeCache.preload('./shapes/letters/NVMono/');
-    
-    isInitializing = false;
-    
-    // Flush the queue of any messages that piled up during the await
-    while (messageQueue.length > 0) {
-      const queuedData = messageQueue.shift();
-      await handleMessage(queuedData);
-    }
-    return;
-  }
-
-  // 3. Normal message handling
-  await handleMessage(data);
 };
+
+let pool = null;

@@ -1,4 +1,4 @@
-precision mediump float;
+ precision mediump float;
   varying float v_alpha;
 
   void main() {
